@@ -1,0 +1,138 @@
+#!/bin/bash
+#############################################################
+# Name:        Supportconfig Plugin for SUSE CaaSP
+# Description: Gathers important troubleshooting information
+#              about SUSE CaaSP
+# License:     GPLv2
+# Author:      containers-bugowner@suse.de
+# Modified:    2017 May 25
+#############################################################
+
+SVER=1.0.0
+RCFILE="/usr/lib/supportconfig/resources/scplugin.rc"
+LOG_LINES=10000  # 0 means include the entire file
+
+if [ -s $RCFILE ]; then
+    if ! source $RCFILE; then
+        echo "ERROR: Initializing resource file: $RCFILE" >&2
+        exit 1
+    fi
+fi
+
+pconf_files() {
+    _log_files 0 "Configuration File" "$@"
+}
+
+plog_files() {
+    loglines="$1"
+    shift
+    _log_files "$loglines" "Log File" "$@"
+}
+
+_log_files() {
+    loglines="$1" title="$2"
+    shift 2
+
+    for file in "$@"; do
+        _log_file "$loglines" "$title" "$file"
+    done
+}
+
+_log_file() {
+    loglines="$1" title="$2" file="$3"
+
+    case "$file" in
+        *.tbz|*.bz2|*.gz|*.zip|*.xz)
+            continue
+            ;;
+    esac
+
+    if ! [ -f "$file" ]; then
+        plugin_tag "$title" "$file - File not found"
+        continue
+    fi
+
+    if [ "$loglines" -eq 0 ]; then
+        plugin_tag "$title" "$file"
+    else
+        plugin_tag "$title" "$file - Last $loglines Lines"
+    fi
+
+    _capture "$loglines" "$file" | _capture_filter
+    echo
+}
+
+_capture() {
+    loglines="$1" file="$2"
+    if [ "$loglines" -eq 0 ]; then
+        cat "$file"
+    else
+        tail -"$loglines" "$file"
+    fi
+}
+
+HIDDEN='<<HIDDEN BY SUPPORTCONFIG PLUGIN>>'
+
+_capture_filter() {
+    sed_args=(
+        # "password": "s3kr1t",
+        # "token": "999888777666",
+        # "machine-install": { "password": "s3kr1t" },
+        -e 's/\("\([a-z_]\+\)\?\(passw\(or\)\?d\|token\)":\? \+"\+\)[^"]\+"/\1'"$CENSORED"'"/gi'
+    )
+    if (( ADD_OPTION_LOGS )); then
+        sed_args+=( -e 's/^M//g' )
+    else
+        sed_args+=(
+            -e '/^[[:space:]]*#/d'
+            -e '/^[[:space:]]*;/d'
+            -e '/^[[:space:]]*\/\//d'
+            -e 's/^M//g'
+            -e '/^$/d'
+        )
+    fi
+    sed "${sed_args[@]}"
+}
+
+#############################################################
+section_header "Supportconfig Plugin for SUSE CaaSP, v${SVER}"
+# The plugin already hardcodes a reference to this directory above, so we're
+# not introducing a new coupling with .spec files by using this absolute path here.
+
+_find_uncompressed () {
+    find "$@" ! -name \*.gz ! -name \*.bz2 ! -name \*.xz
+}
+
+find_and_pconf_files () {
+    [ -d "$1" ] || return 0
+    files=$( _find_uncompressed "$@" )
+    if [ -n "$files" ]; then
+        pconf_files $files
+    fi
+}
+
+find_and_plog_files () {
+    [ -d "$1" ] || return 0
+    files=$( _find_uncompressed "$@" )
+    if [ -n "$files" ]; then
+        plog_files "$LOG_LINES" $files
+    fi
+}
+
+find_and_plog_files_0 () {
+    [ -d "$1" ] || return 0
+    files=$( _find_uncompressed "$@" )
+    if [ -n "$files" ]; then
+        plog_files 0 $files
+    fi
+}
+
+#############################################################
+section_header "Kubernetes"
+
+if [ -e /usr/bin/kubectl ]; then
+    KUBECTL_LOG=/var/log/kubernetes
+    timeout 3 kubectl cluster-info dump --output-directory=$KUBECTL_LOG; echo
+    find_and_plog_files_0 $KUBECTL_LOG -type f
+    rm ${KUBECTL_LOG} -fr
+fi
