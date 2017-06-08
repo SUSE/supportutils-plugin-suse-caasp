@@ -76,9 +76,8 @@ HIDDEN='<<HIDDEN BY SUPPORTCONFIG PLUGIN>>'
 _capture_filter() {
     sed_args=(
         # "password": "s3kr1t",
-        # "token": "999888777666",
-        # "machine-install": { "password": "s3kr1t" },
-        -e 's/\("\([a-z_]\+\)\?\(passw\(or\)\?d\|token\)":\? \+"\+\)[^"]\+"/\1'"$CENSORED"'"/gi'
+        # "PASWORD": "s3kr1t",
+        -e 's/\("\([a-z_]\+\)\?\(passw\(or\)\?d\|PASWORD\)":\? \+"\+\)[^"]\+"/\1'"$CENSORED"'"/gi'
     )
     if (( ADD_OPTION_LOGS )); then
         sed_args+=( -e 's/^M//g' )
@@ -92,6 +91,99 @@ _capture_filter() {
         )
     fi
     sed "${sed_args[@]}"
+}
+
+wait_trace_on() {
+        if (( $VAR_OPTION_WAIT_TRACE )); then
+                OPT=$1
+                case $OPT in
+                -t) TEE=0; shift ;;
+                *) TEE=1 ;;
+                esac
+                LOGGING="$@"
+                WT_START=$(date +%T:%N)
+                log2sys "<$WT_START> $LOGGING"
+                if (( $TEE )); then
+                        printf "%s" "    <$WT_START> $LOGGING  " | tee -a ${LOG}/${CSFILE}
+                else
+                        printf "%s" "    <$WT_START> $LOGGING  "
+                fi
+        fi
+}
+
+wait_trace_off() {
+        if (( $VAR_OPTION_WAIT_TRACE )); then
+                OPT=$1
+                case $OPT in
+                -t) TEE=0 ;;
+                *) TEE=1 ;;
+                esac
+                WT_END=$(date +%T:%N)
+                if (( $TEE )); then
+                        echo "<$WT_END>" | tee -a ${LOG}/${CSFILE}
+                else
+                        echo "<$WT_END>"
+                fi
+        fi
+}
+
+# Input: logfilename command
+log_cmd() {
+        EXIT_STATUS=0
+        LOGFILE=$LOG/$1
+        shift
+        CMDLINE_ORIG="$@"
+        CMDBIN=$(echo $CMDLINE_ORIG | awk '{print $1}')
+        CMD=$(\which $CMDBIN 2>/dev/null | awk '{print $1}')
+        echo "#==[ Command ]======================================#" >> $LOGFILE
+        if [ -x "$CMD" ]; then
+                echo "BACADupa"
+                CMDLINE=$(echo $CMDLINE_ORIG | sed -e "s!${CMDBIN}!${CMD}!")
+                echo "# $CMDLINE" >> $LOGFILE
+                wait_trace_on "$CMDLINE"
+                echo "$CMDLINE" | bash  >> $LOGFILE 2>&1
+                EXIT_STATUS=$?
+                wait_trace_off
+        else
+                echo "# $CMDLINE_ORIG" >> $LOGFILE
+                echo "ERROR: Command not found or not executible" >> $LOGFILE
+                EXIT_STATUS=1
+        fi
+        echo >> $LOGFILE
+        return $EXIT_STATUS
+}
+
+# Input: logfilename rpm
+# Assumes the rpm is installed and $LOG/$RPMFILE has been created
+rpm_verify() {
+        RPMPATH=$LOG/$RPMFILE
+        LOGFILE=$LOG/$1
+        INPUT_RPM=$2
+        echo "#==[ Verification ]=================================#" >> $LOGFILE
+        if rpm -q $INPUT_RPM &>/dev/null
+        then
+                for RPM in $(rpm -q $INPUT_RPM)
+                do
+                        echo "# rpm -V $RPM" >> $LOGFILE
+                        wait_trace_on "rpm -V $RPM"
+                        rpm -V $RPM >> $LOGFILE 2>&1
+                        ERR=$?
+                        wait_trace_off
+                        if [ $ERR -gt 0 ]; then
+                                echo "# Verification Status: Differences Found" >> $LOGFILE
+                        else
+                                echo "# Verification Status: Passed" >> $LOGFILE
+                        fi
+                        echo >> $LOGFILE
+                done
+                #cat $RPMPATH | grep "^$INPUT_RPM " >> $LOGFILE
+                #echo >> $LOGFILE
+                return 0
+        else
+                echo "# RPM Not Installed: $INPUT_RPM" >> $LOGFILE
+                echo >> $LOGFILE
+                return 1
+        fi
 }
 
 #############################################################
@@ -128,11 +220,51 @@ find_and_plog_files_0 () {
 }
 
 #############################################################
-section_header "Kubernetes"
+section_header "Flanneld..."
+if validate_rpm flannel && [ -e /usr/sbin/flanneld ]; then
+    plugin_command 'flanneld -version'
+    plugin_command 'systemctl status flanneld.service'
+    plugin_command 'journalctl -u flanneld'
+    pconf_files /etc/sysconfig/flanneld
+fi
+plugin_message Done
 
-if [ -e /usr/bin/kubectl ]; then
-    KUBECTL_LOG=/var/log/kubernetes
+#############################################################
+section_header "Etcd..."
+if validate_rpm etcdctl && [ -e /usr/bin/etcdctl ]; then
+    plugin_command 'etcdctl --version'
+    plugin_command 'etcdctl member list'
+    plugin_command 'etcdctl cluster-health'
+    plugin_command 'etcdctl get /flannel/network/config'
+    plugin_command 'etcdctl ls /flannel/network/subnets'
+    plugin_command 'systemctl status etcd.service'
+    plugin_command 'journalctl -u etcd'
+    pconf_files /etc/sysconfig/etcd
+fi
+plugin_message Done
+
+#############################################################
+section_header "Kubernetes..."
+KUBECTL_LOG=/var/log/kubernetes
+if validate_rpm kubernetes-client && [ -e /usr/bin/kubectl ]; then
+    plugin_command 'kubectl version'
+    plugin_command 'kubectl api-versions'
+    plugin_command 'kubectl config view -a'
+    plugin_command 'kubectl get nodes'
     timeout 3 kubectl cluster-info dump --output-directory=$KUBECTL_LOG; echo
     find_and_plog_files_0 $KUBECTL_LOG -type f
     rm ${KUBECTL_LOG} -fr
+    find_and_pconf_files /etc/kubernetes -type f
 fi
+plugin_message Done
+
+#############################################################
+section_header "Salt..."
+if validate_rpm salt-minion && [ -e /usr/bin/salt-minion ]; then
+    plugin_command 'salt-minion --versions-report'
+    plugin_command 'systemctl status salt-minion'
+    plugin_command 'journalctl -u salt-minion'
+    find_and_pconf_files /etc/salt -type f
+    find_and_plog_files_0 /var/log/salt -type f
+fi
+plugin_message Done
