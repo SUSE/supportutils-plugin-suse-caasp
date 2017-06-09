@@ -256,6 +256,13 @@ if validate_rpm kubernetes-client && [ -e /usr/bin/kubectl ]; then
     rm ${KUBECTL_LOG} -fr
     find_and_pconf_files /etc/kubernetes -type f
 fi
+
+for K8S_SERVICE in kube-apiserver kube-scheduler kube-controller-manager kube-proxy kubelet; do
+    if validate_rpm $K8S_SERVICE; then
+        plugin_command "systemctl status $K8S_SERVICE"
+        plugin_command "journalctl -u $K8S_SERVICE"
+    fi
+done
 plugin_message Done
 
 #############################################################
