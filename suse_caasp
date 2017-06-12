@@ -192,7 +192,7 @@ section_header "Supportconfig Plugin for SUSE CaaSP, v${SVER}"
 # not introducing a new coupling with .spec files by using this absolute path here.
 
 _find_uncompressed () {
-    find "$@" ! -name \*.gz ! -name \*.bz2 ! -name \*.xz
+    find "$@" ! -name \*.gz ! -name \*.bz2 ! -name \*.xz ! -name \*.key ! -name \*.crt ! -name \*.pub ! -name \*.pem
 }
 
 find_and_pconf_files () {
