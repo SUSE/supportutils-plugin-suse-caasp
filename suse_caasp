@@ -93,6 +93,20 @@ _capture_filter() {
     sed "${sed_args[@]}"
 }
 
+check_rpm() {
+        echo
+        RPM_NAME=$1
+        echo "#==[ Checking RPM ]=================================#"
+        echo "rpm -q $RPM_NAME"
+        if rpm -q $RPM_NAME &>/dev/null; then
+                echo "Status: Package is installed"
+                return 0
+        else
+                echo "Status: Package is not installed"
+                return 1
+        fi
+}
+
 wait_trace_on() {
         if (( $VAR_OPTION_WAIT_TRACE )); then
                 OPT=$1
@@ -221,7 +235,8 @@ find_and_plog_files_0 () {
 
 #############################################################
 section_header "Flanneld..."
-if validate_rpm flannel && [ -e /usr/sbin/flanneld ]; then
+if check_rpm flannel && [ -e /usr/sbin/flanneld ]; then
+    validate_rpm flannel
     plugin_command 'flanneld -version'
     plugin_command 'systemctl status flanneld.service'
     plugin_command 'journalctl -u flanneld'
@@ -231,7 +246,8 @@ plugin_message Done
 
 #############################################################
 section_header "Etcd..."
-if validate_rpm etcdctl && [ -e /usr/bin/etcdctl ]; then
+if check_rpm etcd && [ -e /usr/bin/etcdctl ]; then
+    validate_rpm etcd
     plugin_command 'etcdctl --version'
     plugin_command 'etcdctl member list'
     plugin_command 'etcdctl cluster-health'
@@ -246,7 +262,8 @@ plugin_message Done
 #############################################################
 section_header "Kubernetes..."
 KUBECTL_LOG=/var/log/kubernetes
-if validate_rpm kubernetes-client && [ -e /usr/bin/kubectl ]; then
+if check_rpm kubernetes-client && [ -e /usr/bin/kubectl ]; then
+    validate_rpm kubernetes-client
     plugin_command 'kubectl version'
     plugin_command 'kubectl api-versions'
     plugin_command 'kubectl config view -a'
@@ -257,17 +274,19 @@ if validate_rpm kubernetes-client && [ -e /usr/bin/kubectl ]; then
     find_and_pconf_files /etc/kubernetes -type f
 fi
 
-for K8S_SERVICE in kube-apiserver kube-scheduler kube-controller-manager kube-proxy kubelet; do
-    if validate_rpm $K8S_SERVICE; then
+if check_rpm kubernetes-master; then
+    validate_rpm kubernetes-master
+    for K8S_SERVICE in kube-apiserver kube-scheduler kube-controller-manager kube-proxy kubelet; do
         plugin_command "systemctl status $K8S_SERVICE"
         plugin_command "journalctl -u $K8S_SERVICE"
-    fi
-done
+    done
+fi
 plugin_message Done
 
 #############################################################
 section_header "Salt..."
-if validate_rpm salt-minion && [ -e /usr/bin/salt-minion ]; then
+if check_rpm salt-minion && [ -e /usr/bin/salt-minion ]; then
+    validate_rpm salt-minion
     plugin_command 'salt-minion --versions-report'
     plugin_command 'systemctl status salt-minion'
     plugin_command 'journalctl -u salt-minion'
