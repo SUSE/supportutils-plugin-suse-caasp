@@ -137,7 +137,6 @@ log_cmd() {
         CMD=$(\which $CMDBIN 2>/dev/null | awk '{print $1}')
         echo "#==[ Command ]======================================#" >> $LOGFILE
         if [ -x "$CMD" ]; then
-                echo "BACADupa"
                 CMDLINE=$(echo $CMDLINE_ORIG | sed -e "s!${CMDBIN}!${CMD}!")
                 echo "# $CMDLINE" >> $LOGFILE
                 wait_trace_on "$CMDLINE"
