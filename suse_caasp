@@ -94,15 +94,15 @@ _capture_filter() {
 }
 
 check_rpm() {
-        echo
+        #echo
         RPM_NAME=$1
-        echo "#==[ Checking RPM ]=================================#"
-        echo "rpm -q $RPM_NAME"
+        #echo "#==[ Checking RPM ]=================================#"
+        #echo "rpm -q $RPM_NAME"
         if rpm -q $RPM_NAME &>/dev/null; then
-                echo "Status: Package is installed"
+                #echo "Status: Package is installed"
                 return 0
         else
-                echo "Status: Package is not installed"
+                #echo "Status: Package is not installed"
                 return 1
         fi
 }
@@ -139,6 +139,64 @@ wait_trace_off() {
                         echo "<$WT_END>"
                 fi
         fi
+}
+
+# Input: logfilename logfiles...
+ADD_OPTION_LOGS=0
+conf_files() {
+        LOGFILE=$LOG/$1
+        shift
+        for CONF in $@
+        do
+                echo "#==[ Configuration File ]===========================#" >> $LOGFILE
+                if [ -f $CONF ]; then
+                        echo "# $CONF" >> $LOGFILE
+                        wait_trace_on "$CONF"
+                        if (( ADD_OPTION_LOGS )); then
+                                cat $CONF 2>> $LOGFILE | sed -e 's/\r//g' >> $LOGFILE
+                        else
+                                cat $CONF 2>> $LOGFILE | sed -e '/^[[:space:]]*#/d;/^[[:space:]]*;/d;s/\r//g;/^[[:space:]]*$/d' >> $LOGFILE
+                        fi
+                        echo >> $LOGFILE
+                        wait_trace_off
+                else
+                        echo "# $CONF - File not found" >> $LOGFILE
+                fi
+                echo >> $LOGFILE
+        done
+}
+
+# Input: logfilename lines logfiles...
+# If lines = 0, includes the entire log file
+log_files() {
+        LOGFILE=$LOG/$1
+        shift
+        LOGLINES=$1
+        shift
+        for CONF in $@
+        do
+                BAD_FILE=$(echo "$CONF" | egrep "\.tbz$|\.bz2$|\.gz$|\.zip$|\.xz$")
+                if [ -n "$BAD_FILE" ]; then
+                        continue
+                fi
+                echo "#==[ Log File ]=====================================#" >> $LOGFILE
+                CONF=$(echo $CONF | sed -e "s/%7B%20%7D%7B%20%7D/ /g")
+                if [ -f "$CONF" ]; then
+                        wait_trace_on "$CONF"
+                        if [ $LOGLINES -eq 0 ]; then
+                                echo "# $CONF" >> $LOGFILE
+                                sed -e 's/\r//g' "$CONF" >> $LOGFILE
+                        else
+                                echo "# $CONF - Last $LOGLINES Lines" >> $LOGFILE
+                                tail -$LOGLINES "$CONF" | sed -e 's/\r//g' >> $LOGFILE
+                        fi
+                        echo >> $LOGFILE
+                        wait_trace_off
+                else
+                        echo "# $CONF - File not found" >> $LOGFILE
+                fi
+                echo >> $LOGFILE
+        done
 }
 
 # Input: logfilename command
@@ -232,64 +290,95 @@ find_and_plog_files_0 () {
     fi
 }
 
+find_and_conf_files () {
+    [ -d "$2" ] || return 0
+    files=$( _find_uncompressed "$2" -type f)
+    if [ -n "$files" ]; then
+        conf_files $1 $files
+    fi
+}
+
+find_and_log_files () {
+    [ -d "$2" ] || return 0
+    files=$( _find_uncompressed "$2" -type f)
+    if [ -n "$files" ]; then
+        log_files $1 0 $files
+    fi
+}
+
 #############################################################
-section_header "Flanneld..."
+section_header "Checking flanneld service ..."
+OF=flannel.txt
+plugin_message "All data stored in $OF"
+
 if check_rpm flannel && [ -e /usr/sbin/flanneld ]; then
-    validate_rpm flannel
-    plugin_command 'flanneld -version'
-    plugin_command 'systemctl status flanneld.service'
-    plugin_command 'journalctl -u flanneld'
-    pconf_files /etc/sysconfig/flanneld
+    rpm_verify $OF flannel
+    log_cmd $OF 'flanneld -version'
+    log_cmd $OF 'systemctl status flanneld.service'
+    log_cmd $OF 'journalctl -u flanneld'
+    conf_files $OF /etc/sysconfig/flanneld
 fi
 plugin_message Done
 
 #############################################################
-section_header "Etcd..."
+section_header "Checking etcd service ..."
+OF=etcd.txt
+plugin_message "All data stored in $OF"
+
 if check_rpm etcd && [ -e /usr/bin/etcdctl ]; then
-    validate_rpm etcd
-    plugin_command 'etcdctl --version'
-    plugin_command 'etcdctl member list'
-    plugin_command 'etcdctl cluster-health'
-    plugin_command 'etcdctl get /flannel/network/config'
-    plugin_command 'etcdctl ls /flannel/network/subnets'
-    plugin_command 'systemctl status etcd.service'
-    plugin_command 'journalctl -u etcd'
-    pconf_files /etc/sysconfig/etcd
+    rpm_verify $OF etcd
+    log_cmd $OF 'etcdctl --version'
+    log_cmd $OF 'etcdctl member list'
+    log_cmd $OF 'etcdctl cluster-health'
+    log_cmd $OF 'etcdctl get /flannel/network/config'
+    log_cmd $OF 'etcdctl ls /flannel/network/subnets'
+    log_cmd $OF 'systemctl status etcd.service'
+    log_cmd $OF 'journalctl -u etcd'
+    conf_files $OF /etc/sysconfig/etcd
 fi
 plugin_message Done
 
 #############################################################
-section_header "Kubernetes..."
+section_header "Checking kubernetes services ..."
+OF=kubernetes.txt
+plugin_message "All data stored in $OF"
+
 KUBECTL_LOG=/var/log/kubernetes
 if check_rpm kubernetes-client && [ -e /usr/bin/kubectl ]; then
-    validate_rpm kubernetes-client
-    plugin_command 'kubectl version'
-    plugin_command 'kubectl api-versions'
-    plugin_command 'kubectl config view -a'
-    plugin_command 'kubectl get nodes'
-    timeout 3 kubectl cluster-info dump --output-directory=$KUBECTL_LOG; echo
-    find_and_plog_files_0 $KUBECTL_LOG -type f
-    rm ${KUBECTL_LOG} -fr
-    find_and_pconf_files /etc/kubernetes -type f
+    rpm_verify $OF kubernetes-client
+    log_cmd $OF 'kubectl version'
+    log_cmd $OF 'kubectl api-versions'
+    log_cmd $OF 'kubectl config view -a'
+    log_cmd $OF 'kubectl get nodes'
+    if kubectl cluster-info &>/dev/null; then
+        timeout 3 kubectl cluster-info dump --output-directory=$KUBECTL_LOG; echo
+        find_and_log_files $OF $KUBECTL_LOG
+        rm ${KUBECTL_LOG} -fr
+    fi
+    find_and_conf_files $OF /etc/kubernetes
 fi
 
 if check_rpm kubernetes-master; then
-    validate_rpm kubernetes-master
+    rpm_verify $OF kubernetes-master
     for K8S_SERVICE in kube-apiserver kube-scheduler kube-controller-manager kube-proxy kubelet; do
-        plugin_command "systemctl status $K8S_SERVICE"
-        plugin_command "journalctl -u $K8S_SERVICE"
+        log_cmd $OF "systemctl status $K8S_SERVICE"
+        log_cmd $OF "journalctl -u $K8S_SERVICE"
     done
 fi
 plugin_message Done
 
 #############################################################
-section_header "Salt..."
+section_header "Checking salt services ..."
+OF=salt-minion.txt
+plugin_message "All data stored in $OF"
+
 if check_rpm salt-minion && [ -e /usr/bin/salt-minion ]; then
-    validate_rpm salt-minion
-    plugin_command 'salt-minion --versions-report'
-    plugin_command 'systemctl status salt-minion'
-    plugin_command 'journalctl -u salt-minion'
-    find_and_pconf_files /etc/salt -type f
-    find_and_plog_files_0 /var/log/salt -type f
+    rpm_verify $OF salt-minion
+    log_cmd $OF 'salt-minion --versions-report'
+    log_cmd $OF 'systemctl status salt-minion'
+    log_cmd $OF 'journalctl -u salt-minion'
+    conf_files $OF /etc/salt/minion
+    find_and_conf_files $OF /etc/salt/minion.d
+    find_and_log_files $OF /var/log/salt
 fi
 plugin_message Done
