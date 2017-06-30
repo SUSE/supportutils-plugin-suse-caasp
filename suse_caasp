@@ -257,6 +257,31 @@ rpm_verify() {
         fi
 }
 
+# Input logfilename containername command
+docker_exec() {
+        LOGFILE=$LOG/$1
+        CONTAINERNAME=$2
+        shift; shift;
+        COMMAND="$@"
+        CONTAINER=$(docker ps | grep $CONTAINERNAME | awk '{print $1}')
+
+        echo "#==[ $COMMAND ]==" >> $LOGFILE
+        docker exec $CONTAINER $COMMAND >> $LOGFILE 2>&1
+        EXIT_STATUS=$?
+
+        echo >> $LOGFILE
+        return $EXIT_STATUS
+}
+
+# Check if supportconfig gets run on the CaaSP Admin
+on_admin() {
+        if $(docker ps -a | grep -q velum-dashboard); then
+                return 0
+        else
+                return 1
+        fi
+}
+
 #############################################################
 section_header "Supportconfig Plugin for SUSE CaaSP, v${SVER}"
 # The plugin already hardcodes a reference to this directory above, so we're
@@ -382,3 +407,54 @@ if check_rpm salt-minion && [ -e /usr/bin/salt-minion ]; then
     find_and_log_files $OF /var/log/salt
 fi
 plugin_message Done
+
+# checks that only apply to the admin node
+if check_rpm docker && [ -e /usr/bin/docker ] && on_admin; then
+    #############################################################
+    section_header "Getting minion objects ..."
+    OF=velum-minions.yml
+    plugin_message "All data stored in $OF"
+
+    docker_exec $OF velum-dashboard entrypoint.sh bundle exec rails runner 'puts(Minion.all.map(&:to_yaml))'
+    plugin_message Done
+
+    #############################################################
+    section_header "Getting salt events ..."
+    OF=velum-salt-events.yml
+    plugin_message "All data stored in $OF"
+
+    docker_exec $OF velum-dashboard entrypoint.sh bundle exec rails runner 'puts(SaltEvent.all.map(&:parsed_data).to_yaml)'
+    plugin_message Done
+
+    #############################################################
+    section_header "Checking velum migrations ..."
+    OF=velum-migrations.txt
+    plugin_message "All data stored in $OF"
+
+    docker_exec $OF velum-dashboard entrypoint.sh bundle exec rake db:migrate:status
+    plugin_message Done
+
+    #############################################################
+    section_header "Checking velum routes ..."
+    OF=velum-routes.txt
+    plugin_message "All data stored in $OF"
+
+    docker_exec $OF velum-dashboard entrypoint.sh bundle exec rake routes
+    plugin_message Done
+
+    #############################################################
+    section_header "Listing velum files ..."
+    OF=velum-files.txt
+    plugin_message "All data stored in $OF"
+
+    docker_exec $OF velum-dashboard entrypoint.sh ls -lR
+    plugin_message Done
+
+    #############################################################
+    section_header "Checking salt master ..."
+    OF=salt-master.txt
+    plugin_message "All data stored in $OF"
+
+    docker_exec $OF salt-master salt-key
+    plugin_message Done
+fi
