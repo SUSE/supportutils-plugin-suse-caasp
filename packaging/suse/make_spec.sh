@@ -20,7 +20,7 @@ NAME=$1
 
 cat <<EOF > ${NAME}.spec
 #
-# spec file for package supportutils-plugin-suse-openstack-cloud
+# spec file for package ${NAME}
 #
 # Copyright (c) $YEAR SUSE LINUX GmbH, Nuernberg, Germany.
 #
@@ -41,7 +41,7 @@ Name:           $NAME
 Url:            https://github.com/kubic-project/$NAME/
 Version:        $VERSION
 Release:        0
-Source:         %{name}-%{version}.tar
+Source:         master.tar.gz
 # to make check_if_valid_source_dir happy
 Summary:        Supportconfig Plugin for SUSE CaaSP
 License:        GPL-2.0
