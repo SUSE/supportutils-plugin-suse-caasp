@@ -350,6 +350,9 @@ section_header "Checking etcd service ..."
 OF=etcd.txt
 plugin_message "All data stored in $OF"
 
+set -a
+[ -f /etc/sysconfig/etcdctl ] && source /etc/sysconfig/etcdctl
+set +a
 if check_rpm etcd && [ -e /usr/bin/etcdctl ]; then
     rpm_verify $OF etcd
     log_cmd $OF 'etcdctl --version'
