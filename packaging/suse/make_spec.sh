@@ -18,6 +18,7 @@ COMMIT_UNIX_TIME=$(git show -s --format=%ct)
 VERSION="${VERSION%+*}+$(date -d @$COMMIT_UNIX_TIME +%Y%m%d).git_r${REVISION}_${COMMIT}"
 NAME=$1
 BRANCH=${2:-master}
+SAFE_BRANCH=${BRANCH//\//-}
 
 cat <<EOF > ${NAME}.spec
 #
@@ -42,7 +43,7 @@ Name:           $NAME
 Url:            https://github.com/kubic-project/$NAME/
 Version:        $VERSION
 Release:        0
-Source:         ${BRANCH}.tar.gz
+Source:         ${SAFE_BRANCH}.tar.gz
 # to make check_if_valid_source_dir happy
 Summary:        Supportconfig Plugin for SUSE CaaSP
 License:        GPL-2.0
@@ -58,7 +59,7 @@ Extends supportconfig functionality to include system information about
 SUSE Containers as a Platform. The supportconfig saves the plugin output to plugin-suse_caasp.txt.
 
 %prep
-%setup -q -n ${NAME}-${BRANCH}
+%setup -q -n ${NAME}-${SAFE_BRANCH}
 
 %build
 gzip -9f suse-caasp-plugin.8
