@@ -406,6 +406,7 @@ if check_rpm salt-minion && [ -e /usr/bin/salt-minion ]; then
     log_cmd $OF 'systemctl status salt-minion'
     log_cmd $OF 'journalctl -u salt-minion'
     conf_files $OF /etc/salt/minion
+    conf_files $OF /etc/salt/grains
     find_and_conf_files $OF /etc/salt/minion.d
     find_and_log_files $OF /var/log/salt
 fi
