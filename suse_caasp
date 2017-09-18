@@ -431,6 +431,14 @@ if check_rpm docker && [ -e /usr/bin/docker ] && on_admin; then
     plugin_message Done
 
     #############################################################
+    section_header "Getting salt pillars ..."
+    OF=velum-salt-pillars.yml
+    plugin_message "All data stored in $OF"
+
+    docker_exec $OF velum-dashboard entrypoint.sh bundle exec rails runner 'puts(Pillar.all.pluck(:pillar, :value).to_yaml)'
+    plugin_message Done
+
+    #############################################################
     section_header "Checking velum migrations ..."
     OF=velum-migrations.txt
     plugin_message "All data stored in $OF"
