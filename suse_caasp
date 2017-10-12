@@ -372,7 +372,7 @@ OF=kubernetes.txt
 plugin_message "All data stored in $OF"
 
 KUBECTL_LOG=/var/log/kubernetes
-if check_rpm kubernetes-client && [ -e /usr/bin/kubectl ]; then
+if check_rpm kubernetes-master && ! on_admin; then
     rpm_verify $OF kubernetes-client
     log_cmd $OF 'kubectl version'
     log_cmd $OF 'kubectl api-versions'
@@ -384,9 +384,7 @@ if check_rpm kubernetes-client && [ -e /usr/bin/kubectl ]; then
         rm ${KUBECTL_LOG} -fr
     fi
     find_and_conf_files $OF /etc/kubernetes
-fi
 
-if check_rpm kubernetes-master; then
     rpm_verify $OF kubernetes-master
     for K8S_SERVICE in kube-apiserver kube-scheduler kube-controller-manager kube-proxy kubelet; do
         log_cmd $OF "systemctl status $K8S_SERVICE"
