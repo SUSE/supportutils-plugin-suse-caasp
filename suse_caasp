@@ -435,7 +435,7 @@ if check_rpm docker && [ -e /usr/bin/docker ] && on_admin; then
     OF=velum-salt-pillars.yml
     plugin_message "All data stored in $OF"
 
-    docker_exec $OF velum-dashboard entrypoint.sh bundle exec rails runner 'puts(Pillar.all.pluck(:pillar, :value).to_yaml)'
+    docker_exec $OF velum-dashboard entrypoint.sh bundle exec rails runner 'puts(Pillar.all.pluck(:pillar,:value).to_yaml)'
     plugin_message Done
 
     #############################################################
