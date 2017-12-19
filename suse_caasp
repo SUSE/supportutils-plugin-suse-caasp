@@ -411,7 +411,8 @@ fi
 plugin_message Done
 
 # checks that only apply to the admin node
-if check_rpm docker_1_12_6 && [ -e /usr/bin/docker ] && on_admin; then
+[ -e /usr/bin/docker ] && DOCKER_PKG=`rpm -q --whatprovides /usr/bin/docker`
+if check_rpm $DOCKER_PKG && on_admin; then
     #############################################################
     section_header "Getting minion objects ..."
     OF=velum-minions.yml
