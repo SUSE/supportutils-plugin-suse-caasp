@@ -332,6 +332,21 @@ find_and_log_files () {
 }
 
 #############################################################
+section_header "Checking transactional-update service ..."
+OF=transactional-update.txt
+plugin_message "All data stored in $OF"
+
+if check_rpm transactional-update; then
+    rpm_verify $OF transactional-update
+    log_cmd $OF 'systemctl status transactional-update.service'
+    log_cmd $OF 'systemctl status transactional-update.timer'
+    log_cmd $OF 'journalctl -u transactional-update'
+    log_cmd $OF 'snapper list'
+    log_files $OF 0 /var/log/transactional-update.log
+fi
+plugin_message Done
+
+#############################################################
 section_header "Checking flanneld service ..."
 OF=flannel.txt
 plugin_message "All data stored in $OF"
