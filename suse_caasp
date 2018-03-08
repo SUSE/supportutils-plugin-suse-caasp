@@ -343,6 +343,7 @@ if check_rpm transactional-update; then
     log_cmd $OF 'journalctl -u transactional-update'
     log_cmd $OF 'snapper list'
     log_files $OF 0 /var/log/transactional-update.log
+    log_files $OF 0 /tmp/transactional-update.\*
 fi
 plugin_message Done
 
