@@ -1,0 +1,757 @@
+#!/usr/bin/perl -w
+#############################################################
+# Name:        Salt Events Parser for SUSE CaaSP
+# Copyright:   2018 SUSE LLC
+# License:     GPLv2
+#############################################################
+
+use strict;
+use XML::Bare qw/forcearray/;
+use JSON;
+use Scalar::Util; # Used for detection of numerical values
+use File::Temp; # Core perl module
+use Getopt::Long; # Core perl module
+
+my $json_output_filename;
+my $summary_output_filename;
+my $input_filename;
+my $mode;
+GetOptions(
+    "json_output|j=s" => \$json_output_filename,
+    "summary_output|s=s" => \$summary_output_filename,
+    "input_filename|i:s" => \$input_filename,
+    "mode|m:s" => \$mode
+);
+$mode ||= 'admin'; # other mode is 'dev'
+
+if( !$json_output_filename || !$summary_output_filename ) {
+  print STDERR usage();
+  exit 1;
+}
+
+open( my $ofh, ">$json_output_filename" );
+
+# Map for encoding various characters into JSON, used in encode_item function
+# Placed globally for efficiency. If placed within the function it will cause slowdown
+my %esc = ("\n",'\n',"\r",'\r',"\t",'\t',"\f",'\f',"\b",'\b',"\"",'\"',"\\",'\\\\',"\'",'\\\'');
+
+my $obs;
+my %domhash; # hash of machine ids to fdqn
+my %slshash;
+my @orchlist;
+my $coder = JSON->new->pretty;
+if( $input_filename ) {
+  process_file( $ARGV[0], $ofh );
+}
+else {
+  my $fh = File::Temp->new();
+  die "Could not create a temporary file" if( !$fh );
+  my $fname = $fh->filename;
+  die "Could not get filename of temporary file" if( !$fname );
+  
+  # 0 is used to enforce output of row names, so that this query could be easily tweaked
+  db_cmd( "use velum_production;select 0,data from salt_events;", $fname );
+  process_fh( $fh, $ofh );
+  
+  # Temporary file will get removed automatically
+}
+
+close( $ofh );
+
+# Generate the clean report
+open( my $rfh, ">$summary_output_filename" );
+binmode( $rfh );
+open( $ofh, "<$json_output_filename" );
+for my $orch ( @orchlist ) {
+  my $start = $orch->{'start'};
+  seek( $ofh, $start, SEEK_SET );
+  my $data;
+  read( $ofh, $data, $orch->{'len'}-1 );
+  my $ob = $coder->decode( $data );
+  
+  # Regenerate line number tracking for correlations
+  my $lno = $orch->{'lno'};
+  #print "orch lno: $lno\n";
+  my $coder_state = { buffer => '', line => $lno, level => 0 };
+  encode_item( $coder_state, $ob );
+  
+  process_orchestrate_row( $ob, $rfh );
+}
+close( $rfh );
+
+exit 0;
+
+sub usage {
+  return "Proper Usage:
+    debug-salt --json_output=[file] --summary_output=[file] (--input_filename=[file])
+    debug-salt -j [file] -s [file] (-i [file])\n";
+}
+
+# ----------- Functions for XML salt db dump to JSON begin here -----------------
+
+sub process_file {
+  my ( $filename, $ofh ) = @_;
+  open( my $fh, "<$filename" );
+  process_fh( $fh, $ofh );
+}
+
+# Process previously dumped XML of salt events table from MariaDB
+# Output the results into the $ofh global file handle
+sub process_fh {
+  my ( $fh, $ofh ) = @_;
+  my $buffer;
+  my $in = 0;
+  
+  # The 'coder' being referred to here is the encode_item function
+  my $coder_state = { buffer => '', line => 2, level => 0 };
+  
+  print $ofh "[\n";
+  
+  while( my $line = <$fh> ) {
+    $in = 1 if( $line =~ m/^  <row>$/ );
+    $buffer .= "$line\n" if( $in );
+
+    if( $line =~ m/^  <\/row>$/ ) {
+      $in = 0;
+      
+      my ( $xob, $row ) = XML::Bare->simple( text => $buffer );
+      
+      my $obs = rows_to_obs( [ $row->{'row'} ] );
+      my $ob = $obs->[0];
+      
+      my $fun = $ob->{'fun'} || '';
+        
+      my $chunk;
+      if( $fun eq 'runner.state.orchestrate' ) {
+        # encode_item advances the 'line' variable within $coder_state
+        my $start_lno = $coder_state->{'line'};
+        encode_item( $coder_state, $ob );
+        $chunk = $coder_state->{'buffer'};
+        delete $coder_state->{'buffer'};
+        #process_orchestrate_row( $ob, $rfh );
+        push( @orchlist, {
+            lno => $start_lno,
+            start => tell( $ofh ),
+            len => length( $chunk )
+        } );
+      }
+      else {
+        $chunk = $coder->encode( $ob );
+        # Advance the tracked line number by the number of lines that will be appended
+        
+        my $lines = 0;
+        while( $chunk =~ m/\n/g ) { $lines++; }
+        #my $lines = () = $chunk =~ m/\Q\n/g;
+        #print "Lines: $lines\n";
+        
+        $coder_state->{'line'} += $lines;
+      }
+      
+      process_grains_items_row( $ob ) if( $fun eq 'grains.items' );
+      process_state_sls_row( $ob)     if( $fun eq 'state.sls' );
+      
+      chop( $chunk );
+      $chunk .= ",\n";
+      print $ofh $chunk;
+
+      $buffer = '';
+    }
+  }
+  
+  print $ofh "0]\n";
+  
+  # Note that above process will leave a structure similar to this:
+  # [ {...},{...},0 ]
+  
+  close( $fh );
+}
+
+# Run a specific DB command on the admin.devenv mariadb instance
+# Store the results in the passed filename
+sub db_cmd {
+  my ( $db_cmd, $filename ) = @_;
+  
+  my $db_pass_path = "/var/lib/misc/infra-secrets/mariadb-velum-password";
+  my $pass_param = "--password=\"\$(cat $db_pass_path)\"";
+  
+  if( $mode eq 'dev' ) {
+    my $pod_id = cmd_on_domain( 'admin', 'docker ps -f name=mariadb --format "{{.ID}}"', 0 );
+    chomp $pod_id;
+    #print "MariaDB pod id: $pod_id\n";
+    my $cmd = "docker exec $pod_id mysql -u velum $pass_param -e \"$db_cmd\" -X";
+    return cmd_on_domain( 'admin', $cmd, $filename );
+  }
+  elsif( $mode eq 'admin' ) {
+    my $pod_id = `docker ps -f name=mariadb --format "{{.ID}}"`;
+    chomp $pod_id;
+    #print "MariaDB pod id: $pod_id\n";
+    my $cmd = "docker exec $pod_id mysql -u velum $pass_param -e \"$db_cmd\" -X";
+    `$cmd > $filename`;
+  }
+}
+
+# Execute a shell command on a specific subdomain of devenv
+# Either return the results or store them in the passed filename
+sub cmd_on_domain {
+  my ( $domain, $cmd, $filename ) = @_;
+  
+  my $dn = "devenv.caasp.suse.net";
+  my $ssh_base = "ssh -F environment.ssh_config root\@$domain.$dn";
+  if( !$filename ) {
+    return `$ssh_base '$cmd' 2>/dev/null`;
+  }
+  `$ssh_base '$cmd' 2>/dev/null >$filename`;
+}
+
+# Decode some salt event rows from the DB into their contained JSON
+sub rows_to_obs {
+  my $rows = shift;
+  my @obs;
+  for my $row ( @$rows ) {
+    my $fields = $row->{'field'};
+    for my $field ( @$fields ) {
+      if( $field->{'name'} eq 'data' ) {
+        my $xmljson = $field->{'content'};
+        $xmljson =~ s/&quot;/"/g;
+        $xmljson =~ s/&amp;/&/g;
+        push( @obs, decode_json( $xmljson ) );
+      }
+    }
+  }
+  return \@obs;
+}
+
+sub obs_to_json {
+  my ( $obs, $fh ) = @_;
+  
+  my $coder_state = { buffer => '', line => 2, level => 0 };
+  print $fh "[\n";
+  for my $ob ( @$obs ) {
+    my $fun = $ob->{'fun'} || '';
+    
+    my $chunk;
+    
+    # Use encode_item to encode to JSON for orchestrate, so that the output line numbers
+    # can be tracked. For anything else use standard fast JSON::XS coder
+    if( $fun eq 'runner.state.orchestrate' ) {
+      encode_item( $coder_state, $ob );
+      $chunk = $coder_state->{'buffer'};
+      delete $coder_state->{'buffer'};
+    }
+    else {
+      $chunk = $coder->encode( $ob );
+    }
+    
+    chop( $chunk );
+    $chunk .= ",\n";
+    
+    print $fh $chunk;
+  }
+}
+
+sub encode_item {
+  my ( $info, $item ) = @_;
+  my $reftype = ref( $item );
+  
+  if( $reftype ) {
+    if( $reftype eq 'ARRAY' ) {
+      write_line( 0, $info, '[' );
+      $info->{'level'}++;
+      my $itemi = 1;
+      for my $subitem ( @$item ) {
+        encode_item( $info, $subitem );
+        $info->{'buffer'} = substr( $info->{'buffer'}, 0, -1 ) . ",\n" if( $itemi++ < scalar @$item );
+      }
+      $info->{'level'}--;
+      write_line( 0, $info, ']' );
+    }
+    elsif( $reftype eq 'HASH' ) {
+      write_line( $item, $info, '{' );
+      $info->{'level'}++;
+      my @ok_keys;
+      for my $key ( sort { $a cmp $b } keys %$item ) {
+        next if( $key =~ m/^!/ );
+        push( @ok_keys, $key );
+      }
+      
+      my $keyi = 1;
+      for my $key ( @ok_keys ) {
+        my $keyout = $key;
+        $keyout =~ s/([\x22\x5c\n\r\t\f\b])/$esc{$1}/g; 
+        
+        $info->{'buffer'} .= ( "   " x $info->{'level'} ) . "\"$keyout\": ";
+        $info->{'prefix'} = 1;
+        $item->{"!line_$key"} = $info->{'line'};
+        
+        encode_item( $info, $item->{$key} );
+        $info->{'buffer'} = substr( $info->{'buffer'}, 0, -1 ) . ",\n" if( $keyi++ < scalar @ok_keys );
+      }
+      $info->{'level'}--;
+      write_line( 0, $info, '}' );
+    }
+    elsif( $reftype eq 'JSON::PP::Boolean' ) {
+      write_line( 0, $info, $$item == 1 ? 'true' : 'false' );
+    }
+    
+    return;
+  }
+  if( ! defined $item ) {
+    write_line( 0, $info, 'null' );
+    return;
+  }
+  if( Scalar::Util::looks_like_number( $item ) ) {
+    if( $item eq ( $item * 1 ) ) {
+      write_line( 0, $info, $item );
+    }
+    else {
+      write_line( 0, $info, '"'.$item.'"' );
+    }
+    return;
+  }
+  my $val = $item; # Make a temporary value so we don't alter the original data
+  $val =~ s/([\x22\x5c\n\r\t\f\b])/$esc{$1}/g; # 22 = ", 5c = \
+  write_line( 0, $info, '"'.$val.'"' );
+}
+
+sub write_line {
+  my ( $srcob, $info, $line ) = @_;
+  my $prefix = '';
+  if( !$info->{'prefix'} ) {
+    $prefix = "   " x $info->{'level'};
+  }
+  else {
+    $info->{'prefix'} = '';
+  }
+  
+  $srcob->{'!line'} = $info->{'line'} if( $srcob );
+  $info->{'buffer'} .= "$prefix$line\n";
+  $info->{'line'}++;
+}
+
+# ----------- Functions for Orchestration summary begin here -----------------
+
+sub process_grains_items_row {
+  my $row = shift;
+  return if( !$row->{'cmd'} );
+  return if( $row->{'cmd'} ne '_return' );
+  my $return = $row->{'return'};
+  my $machine_id = $return->{'machine_id'};
+  return if( !$machine_id );
+  my $fqdn = $return->{'fqdn'};
+  return if( !$fqdn );
+  $domhash{ $machine_id } = $fqdn;
+}
+
+sub process_state_sls_row {
+  my $ob = shift;
+  return if( $ob->{'cmd'} );
+  my $sls = $ob->{'arg'}[0];
+  $slshash{ $ob->{'jid'} } = $sls;
+}
+
+sub process_orchestrate_row {
+  my ( $row, $rfh ) = @_;
+  my $return = $row->{'return'};
+  return if( !$return );
+  my $data = $return->{'data'};
+  return if( !$data );
+  dump_nodes( $rfh, $data, 1, '' );
+}
+
+sub dump_nodes {
+  my ( $rfh, $data, $level, $dent ) = @_;
+  my @nodes = keys %$data;
+  return if( !@nodes );
+  
+  for my $node ( @nodes ) {
+    my $serverData = $data->{$node};
+    next if( !$serverData || !ref( $serverData ) || ref($serverData) ne 'HASH' || !%$serverData );
+    my @evNames = keys %$serverData;
+    my $dom = $domhash{ $node };
+    if( $dom ) {
+      $node = $dom;
+      $node =~ s/.devenv.caasp.suse.net$//;
+    }
+    
+    my @rows;
+    my @valid_names;
+    for my $evName ( @evNames ) {
+      my $ev = $serverData->{$evName};
+      next if( !$ev || !ref( $ev ) || ref( $ev ) ne 'HASH' );
+      push( @valid_names, $evName );
+      
+      # Turn start time into a number so it can be sorted by
+      my $start = $ev->{'start_time'} || 0;
+      if( $ev->{'__run_num__'} ) {
+        $ev->{'sort'} = $ev->{'__run_num__'};
+      }
+      else {
+        my $num = $start;
+        $num =~ s/[:.]//g;
+        $ev->{'sort'} = $num;
+      }
+      $start =~ s/\.[0-9]+$//;
+      $ev->{'start_time'} = $start;
+      
+      # Clean up duration
+      my $dur = $ev->{'duration'}; # in milliseconds
+      if( $dur ) {
+        $dur = int( $dur ) if( $dur > 1 );
+        if( $dur > 100 ) {
+          $dur = int( $dur / 100 );
+          if( $dur > 60 ) {
+            $dur = int( $dur / 60 ) . "m";
+          }
+          else {
+            $dur = "${dur}s";
+          }
+        }
+        else {
+          $dur = "${dur}ms";
+        }
+        $ev->{'duration'} = $dur;
+      }
+    }
+    
+    for my $evName ( sort { $serverData->{ $a }{'sort'} <=> $serverData->{ $b }{'sort'} } @valid_names ) {
+      my $ev = $serverData->{ $evName };
+      next if( !$ev || !ref( $ev ) || ref( $ev ) ne 'HASH' );
+      
+      my $lno = $ev->{'!line'} || '?';
+      my $evinfo = { result => '' };
+      if( defined $ev->{'result'} ) {
+        if( $ev->{'result'} ) {
+          $evinfo->{'result'} = 'success';
+        }
+        else {
+          $evinfo->{'result'} = 'failure';
+        }
+      }
+      
+      if( $evName =~ m/(.+)\_\|\-(.+)\_\|\-(.+)\_\|\-(.+)/ ) {
+        my $evType = $1;
+        my $a1 = $2;
+        my $a2 = $3;
+        my $evVariant = $4;
+        
+        if( $evType eq 'salt' ) {
+          if( $evVariant eq 'state' ) {
+            my $state = $a1;
+            if( $ev->{'name'} ) { $state = $ev->{'name'} }
+            print $rfh "\n${dent}\x1b[1m#$lno State: $state\x1b[m\n";
+          }
+          elsif( $evVariant eq 'function' ) {
+            my $func = $a1;
+            if( $ev->{'name'} ) { $func = $ev->{'name'} }
+            print $rfh "\n${dent}#$lno Function: $func\n";
+          }
+        }
+        else {
+          if( $a1 eq $a2 ) {
+            if( $level == 2 ) {
+              push( @rows, [ $evinfo, "#$lno", $evType, $evVariant, $a1 ] );
+            }
+            else {
+              print $rfh "${dent}$evType-$evVariant\t\t$a1\n";
+            }
+          }
+          else {
+            if( $level == 2 ) {
+              push( @rows, [ $evinfo, "#$lno", $evType, $evVariant, $a1, $a2 ] );
+              my $changes = $ev->{'changes'};
+              if( $changes ) {
+                if( !ref( $changes ) ) {
+                  $changes = [ $changes ];
+                }
+                my $showok = 0;
+                if( ref( $changes ) eq 'HASH' ) {
+                  $showok = 1;
+                  my $arr = [];
+                  for my $key ( keys %$changes ) {
+                    next if( $key =~ m/^!/ );
+                    my $val = $changes->{ $key };
+                    if( $key eq 'diff' && $val =~ m/---.+/ ) {
+                      $val = 'contents...';
+                    }
+                    my $show = 1;
+                    $show = 0 if( $val =~ m/^\s*$/ );
+                    $show = 0 if( $key eq 'retcode' && $val eq '0' );
+                    $show = 0 if( $key eq 'pid' );
+                    $show = 0 if( $key eq 'stderr' && $val =~ m/% Total/ );
+                    push( @$arr, "$key: $val" ) if( $show );
+                  }
+                  $changes = $arr;
+                }
+                if( @$changes ) {
+                  push( @rows, [ { join => 1 }, @$changes ] );
+                } elsif( $showok ) {
+                  push( @rows, [ {}, 'ok' ] );
+                }
+              }
+            }
+            else {
+              my $lno = $ev->{'!line'} || '?';
+              print $rfh "${dent}#$lno $evType-$evVariant\t$a1\t$a2\n";
+            }
+          }
+          next;
+        }
+      }
+      else {
+        my @evParts = split( /\_\|\-/, $evName );
+        if( $evParts[0] eq 'cmd' ) {
+          if( $level == 2 ) {
+            push( @rows, [ $evinfo, 'Cmd', $evParts[1] ] );
+          }
+          else {
+            print "${dent}Cmd $evParts[1]\n";
+          }
+        }
+        else {
+          $evName = join("\t", @evParts );
+          if( $level == 2 ) {
+            push( @rows, [ $evinfo, 'Event', @evParts ] );
+          }
+          else {
+            print $rfh "${dent}Event: $evName\n\n";
+          }
+        }
+        next;
+      }
+      
+      my $result = $ev->{'result'} ? 'success' : 'failure';
+      my $dur = $ev->{'duration'} || '0';
+      my $start_time = $ev->{'start_time'};
+      my $changes = $ev->{'changes'};
+      print $rfh "${dent}$start_time - $dur - $result\n";
+      if( !$ev->{'result'} && $ev->{'comment'} ) {
+        my $comment = $ev->{'comment'};
+        if( $comment =~ m/^Run failed on minions: ([a-z0-9, ]+)\nFailures:\n(.+)/s ) {
+          my $failnodes = $1;
+          my $failures = $2;
+          my $summary = '';
+          
+          my @failid_arr = split( /, /, $failnodes );
+          for my $failid ( @failid_arr ) {
+            my $failname = $failid;
+            if( $domhash{ $failid } ) {
+              $failname = $domhash{ $failid };
+              $failname =~ s/.devenv.caasp.suse.net$//;
+            }
+    
+            print $rfh "\n#$lno Fail details for $failname:\n";
+            if( $failures !~ m/    $failid:\n    \-{10}\n(.+?)\n    Summary for $failid\n(.+?Total run time)/s ) {
+              print $rfh "Raw failure:\n";
+              print $rfh $failures;
+            }
+            else {
+            while( $failures =~ m/    $failid:\n    \-{10}\n(.+?)\n    Summary for $failid\n(.+?Total run time)/gs ) {
+                my $faildetail = $1;
+                my $summary = $2;
+                my @fails = split(/\n\s{4}\-{10}\n/, $faildetail );
+                for my $fail ( @fails ) {
+                  my $failob = process_dashed_output( $rfh, $fail );
+                  if( $failob ) {
+                    my $result = $failob->{'Result'} || '';
+                    
+                    if( $result eq 'True' ) {
+                      print $rfh "\x1b[92m";
+                    }
+                    if( $result eq 'False' ) {
+                      print $rfh "\x1b[91m";
+                    }
+                    
+                    if( %$failob ) {
+                      delete $failob->{'Result'};
+                      delete $failob->{'Changes'} if( $failob->{'Changes'} =~ m/^\s*$/ );
+                    }
+                    
+                    if( $result eq 'True' ) {
+                      my $id = $failob->{'ID'};
+                      my $func = $failob->{'Function'} || '';
+                      my $dur = $failob->{'Duration'} || '';
+                      my $started = $failob->{'Started'};
+                      print $rfh "    $func - $id\n";
+                      #print $rfh "  $started - $dur\n" if( $func && $dur );
+                    }
+                    else {
+                      print $rfh $coder->encode( $failob );
+                    }
+                  }
+                  else {
+                    print $rfh "$fail\n";
+                  }
+                  print $rfh "\x1b[m";
+                }
+                $summary =~ s/\n    Total run time//s;
+                $summary =~ s/    \-{13}\n//gs;
+                print $rfh "Summary for $failname:\n$summary\n";
+            }
+            }
+          }
+        }
+        else {
+          print $rfh "\x1b[91m";
+          print $rfh $ev->{'comment'};
+          print $rfh "\n\x1b[m";
+        }
+      }
+      if( $ev->{'__jid__'} ) {
+        my $sls = $slshash{ $ev->{'__jid__'} };
+        if( $sls ) {
+          print $rfh "sls: $sls\n";
+        }
+      }
+      if( $ev->{'changes'} &&
+          ref( $ev->{'changes'} ) &&
+          ref( $ev->{'changes'} ) eq 'HASH' &&
+          $ev->{'changes'}{'ret'} && %{$ev->{'changes'}{'ret'}} ) {
+        my $subServers = $ev->{'changes'}{'ret'};
+        dump_nodes( $rfh, $subServers, $level + 1, $dent . '  ' );
+      }
+    }
+    
+    if( $level == 2 && @rows ) {
+      print $rfh "${dent}\x1b[1mNode: $node\x1b[m\n" if( @evNames );
+      print_table( $rfh, rows => \@rows, col_max_sizes => [0,6,20,20,30,30] );
+    }
+  }
+}
+
+sub process_dashed_output {
+  my ( $rfh, $text ) = @_;
+  
+  my @lines = split( /\n/, $text );
+  my $l1 = $lines[0];
+  my $colon_pos = index( $l1, ':' );
+  return 0 if( $colon_pos == -1 );
+  my $ob = {};
+  my $curkey;
+  for my $line ( @lines ) {
+    my $expr = '.' x $colon_pos;
+    if( $line =~ m/^($expr): (.+)/ ) {
+      $curkey = $1;
+      my $val = $2;
+      $curkey =~ s/^\s+//; # strip initial spaces
+      $ob->{ $curkey } = $val;
+    }
+    else {
+      $ob->{ $curkey } .= "\n$line" if( $curkey );
+    }
+  }
+  
+  if( $ob->{'Changes'} ) {
+    my $changes_raw = $ob->{'Changes'};
+    my @c_lines = split(/\n/, $changes_raw );
+    shift @c_lines; # first line is blank
+    my $proc_result = process_change_output( $rfh, \@c_lines );
+    if( $proc_result ) {
+      $ob->{'Changes'} = $proc_result;
+    }
+  }
+  
+  return $ob;
+}
+
+sub process_change_output {
+  my ( $rfh, $c_lines ) = @_;
+  my $cl1 = $c_lines->[0];
+  return 0 if( !$cl1 );
+  if( $cl1 =~ m/^\s*\-{10}$/ ) {
+    my $c_ob = {};
+    my $dentlen = index( $cl1, '-' );
+    shift @$c_lines;
+    my $c_curkey;
+    
+    my $linesets = {};
+    for my $line ( @$c_lines ) {
+      my $dent = ' ' x $dentlen;
+      if( $line =~ m/^$dent([^ :]+):$/ ) {
+        $c_curkey = $1;
+      }
+      else {
+        $line =~ s/^$dent    //;
+        if( !$linesets->{ $c_curkey } ) {
+          $linesets->{ $c_curkey } = []; 
+        }
+        push( @{$linesets->{ $c_curkey }}, $line );
+      }
+    }
+    for my $key ( keys %$linesets ) {
+      my $val_lines = $linesets->{ $key };
+      $c_ob->{ $key } = join("\n", @$val_lines );
+      my $val_l1 = $val_lines->[0];
+      if( $val_l1 =~ m/^\-{10}$/ ) {
+        $c_ob->{ $key } = process_change_output( $rfh, $val_lines );
+      }
+      else {
+        $c_ob->{ $key } = shift @$val_lines;
+        for my $val_line ( @$val_lines ) {
+          $c_ob->{ $key } .= "\n$val_line";
+        }
+      }
+    }
+    delete $c_ob->{'pid'};
+    return $c_ob;
+  }
+  return 0;
+}
+
+sub print_table {
+  my $rfh = shift;
+  my %info = ( @_ );
+  my $rows = $info{'rows'};
+  my $col_max_sizes = $info{'col_max_sizes'} || [];
+  my @colsizes = [0];
+  for my $cols ( @$rows ) {
+    my $coli = 0;
+    for my $coldata ( @$cols ) {
+      my $len = length( $coldata );
+      my $curmax = $colsizes[ $coli ] || 0;
+      if( $len > $curmax ) {
+        my $max_allowed = $col_max_sizes->[ $coli ] || 1000;
+        if( $len <= $max_allowed ) {
+          $colsizes[ $coli ] = $len + 1;
+        }
+        else {
+          $colsizes[ $coli ] = $max_allowed;
+        }
+      }
+      $coli++;
+    }
+  }
+  
+  for my $cols ( @$rows ) {
+    my $coli = 1;
+    my $rowinfo = shift @$cols;
+    if( $rowinfo->{'join'} ) {
+      for my $line ( @$cols ) {
+        print $rfh "  $line\n";
+      }
+      next;
+    }
+    for my $coldata ( @$cols ) {
+      my $colsize = $colsizes[ $coli ] + 1;
+      my $len = length( $coldata );
+      
+      my $result = $rowinfo->{'result'} || '';
+      if( $result eq 'success' ) {
+        print $rfh "\x1b[92m";
+      }
+      if( $result eq 'failure' ) {
+        print $rfh "\x1b[91m";
+      }
+      if( $len < $colsize ) {
+        my $spaces = $colsize - $len;
+        print $rfh " " x $spaces;
+        print $rfh $coldata;
+      }
+      else {
+        print $rfh " " . substr( $coldata, 0, $colsize - 1 - 3 ) . "..." ;
+      }
+      print $rfh "\x1b[m";
+      $coli++;
+    }
+    print $rfh "\n";
+  }
+}

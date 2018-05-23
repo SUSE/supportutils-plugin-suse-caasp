@@ -440,9 +440,10 @@ if check_rpm $DOCKER_PKG && on_admin; then
     #############################################################
     section_header "Getting salt events ..."
     OF=velum-salt-events.yml
-    plugin_message "All data stored in $OF"
+    OFS=velum-salt-events-summary.txt
+    plugin_message "JSON stored in $OF - Summary stored in $OFS"
 
-    docker_exec $OF velum-dashboard entrypoint.sh bundle exec rails runner 'puts(SaltEvent.all.map(&:parsed_data).to_yaml)'
+    /var/lib/supportutils-plugin-suse-caasp/debug-salt --json_output=$OF --summary_output=$OFS
     plugin_message Done
 
     #############################################################
