@@ -443,7 +443,7 @@ if check_rpm $DOCKER_PKG && on_admin; then
     OFS=velum-salt-events-summary.txt
     plugin_message "JSON stored in $OF - Summary stored in $OFS"
 
-    /var/lib/supportutils-plugin-suse-caasp/debug-salt --json_output=$OF --summary_output=$OFS
+    /var/lib/supportutils-plugin-suse-caasp/debug-salt --json_output=$OF --summary_output=$OFS --text-status --no-color
     plugin_message Done
 
     #############################################################
