@@ -15,14 +15,47 @@ use Getopt::Long; # Core perl module
 my $json_output_filename;
 my $summary_output_filename;
 my $input_filename;
-my $mode;
+my $mode = "admin"; # other mode is 'dev'
+my $use_color = 1;
+my $use_text = 0;
+my $good = "GOOD:";
+my $fail = "FAIL:";
+my $bold = "*";
+my $bold_end_text = "*";
+my $good_start = "\x1b[92m"; # Green
+my $good_end = "\x1b[m";
+my $fail_start = "\x1b[91m"; # Red
+my $fail_end = "\x1b[m";
+my $bold_start = "\x1b[1m";
+my $bold_end = "\x1b[m";
 GetOptions(
     "json_output|j=s" => \$json_output_filename,
     "summary_output|s=s" => \$summary_output_filename,
     "input_filename|i:s" => \$input_filename,
-    "mode|m:s" => \$mode
+    "mode|m:s" => \$mode,
+    "color|c!" => \$use_color,
+    "text-status|t!" => \$use_text,
+    "good:s" => \$good,
+    "fail:s" => \$fail,
+    "bold:s" => \$bold,
+    "good-end:s" => \$good_end,
+    "fail-end:s" => \$fail_end,
+    "bold-end:s" => \$bold_end_text
 );
-$mode ||= 'admin'; # other mode is 'dev'
+if( !$use_color ) {
+  $good_start = "";
+  $good_end = "";
+  $fail_start = "";
+  $fail_end = "";
+  $bold_start = "";
+  $bold_end = "";
+}
+if( $use_text ) {
+  $good_start .= $good;
+  $fail_start .= $fail;
+  $bold_start .= $bold;
+  $bold_end = "$bold_end_text$bold_end";
+}
 
 if( !$json_output_filename || !$summary_output_filename ) {
   print STDERR usage();
@@ -41,7 +74,7 @@ my %slshash;
 my @orchlist;
 my $coder = JSON->new->pretty;
 if( $input_filename ) {
-  process_file( $ARGV[0], $ofh );
+  process_file( $input_filename, $ofh );
 }
 else {
   my $fh = File::Temp->new();
@@ -84,7 +117,16 @@ exit 0;
 sub usage {
   return "Proper Usage:
     debug-salt --json_output=[file] --summary_output=[file] (--input_filename=[file])
-    debug-salt -j [file] -s [file] (-i [file])\n";
+    debug-salt -j [file] -s [file] (-i [file])
+    Options:
+      --color ( enable colorized output - default )
+      --no-color ( disable color )
+      --text-status ( display text 'good'/'fail' )
+      --no-text-status ( do not display text for 'good'/'fail' )
+      --good 'YAY:' ( use 'YAY' instead of 'good' )
+      --fail 'BOO:' ( use 'BOO' instead of 'fail' )
+      --good 'Y[' --good-end ']' ( surround with Y[] )
+      --fail 'N[' --fail-end ']' ( surround with N[] )\n";
 }
 
 # ----------- Functions for XML salt db dump to JSON begin here -----------------
@@ -438,7 +480,7 @@ sub dump_nodes {
           if( $evVariant eq 'state' ) {
             my $state = $a1;
             if( $ev->{'name'} ) { $state = $ev->{'name'} }
-            print $rfh "\n${dent}\x1b[1m#$lno State: $state\x1b[m\n";
+            print $rfh "\n${dent}$bold_start#$lno State: $state$bold_end\n";
           }
           elsif( $evVariant eq 'function' ) {
             my $func = $a1;
@@ -555,10 +597,10 @@ sub dump_nodes {
                     my $result = $failob->{'Result'} || '';
                     
                     if( $result eq 'True' ) {
-                      print $rfh "\x1b[92m";
+                      print $rfh $good_start;
                     }
                     if( $result eq 'False' ) {
-                      print $rfh "\x1b[91m";
+                      print $rfh $fail_start;
                     }
                     
                     if( %$failob ) {
@@ -577,11 +619,13 @@ sub dump_nodes {
                     else {
                       print $rfh $coder->encode( $failob );
                     }
+                    
+                    if( $result eq 'True'  ) { print $rfh $good_end; }
+                    if( $result eq 'False' ) { print $rfh $fail_end; }
                   }
                   else {
-                    print $rfh "$fail\n";
+                    print $rfh $fail_start, "$fail\n", $fail_end;
                   }
-                  print $rfh "\x1b[m";
                 }
                 $summary =~ s/\n    Total run time//s;
                 $summary =~ s/    \-{13}\n//gs;
@@ -591,9 +635,7 @@ sub dump_nodes {
           }
         }
         else {
-          print $rfh "\x1b[91m";
-          print $rfh $ev->{'comment'};
-          print $rfh "\n\x1b[m";
+          print $rfh $fail_start, $ev->{'comment'}, $fail_end;
         }
       }
       if( $ev->{'__jid__'} ) {
@@ -612,7 +654,7 @@ sub dump_nodes {
     }
     
     if( $level == 2 && @rows ) {
-      print $rfh "${dent}\x1b[1mNode: $node\x1b[m\n" if( @evNames );
+      print $rfh "${dent}${bold_start}Node: $node$bold_end\n" if( @evNames );
       print_table( $rfh, rows => \@rows, col_max_sizes => [0,6,20,20,30,30] );
     }
   }
@@ -730,17 +772,14 @@ sub print_table {
       }
       next;
     }
+    my $result = $rowinfo->{'result'} || '';
+    if( $result eq 'success' ) { print $rfh $good_start; }
+    if( $result eq 'failure' ) { print $rfh $fail_start; }
+    
     for my $coldata ( @$cols ) {
       my $colsize = $colsizes[ $coli ] + 1;
       my $len = length( $coldata );
       
-      my $result = $rowinfo->{'result'} || '';
-      if( $result eq 'success' ) {
-        print $rfh "\x1b[92m";
-      }
-      if( $result eq 'failure' ) {
-        print $rfh "\x1b[91m";
-      }
       if( $len < $colsize ) {
         my $spaces = $colsize - $len;
         print $rfh " " x $spaces;
@@ -749,9 +788,11 @@ sub print_table {
       else {
         print $rfh " " . substr( $coldata, 0, $colsize - 1 - 3 ) . "..." ;
       }
-      print $rfh "\x1b[m";
+      
       $coli++;
     }
+    if( $result eq 'success' ) { print $rfh $good_end; }
+    if( $result eq 'failure' ) { print $rfh $fail_end; }
     print $rfh "\n";
   }
 }
