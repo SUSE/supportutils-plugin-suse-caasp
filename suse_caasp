@@ -266,7 +266,7 @@ docker_exec() {
         CONTAINER=$(docker ps | grep $CONTAINERNAME | awk '{print $1}')
 
         echo "#==[ $COMMAND ]==" >> $LOGFILE
-        docker exec $CONTAINER $COMMAND >> $LOGFILE 2>&1
+        timeout 300 docker exec $CONTAINER $COMMAND >> $LOGFILE 2>&1
         EXIT_STATUS=$?
 
         echo >> $LOGFILE
