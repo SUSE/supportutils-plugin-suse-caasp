@@ -439,8 +439,8 @@ if check_rpm $DOCKER_PKG && on_admin; then
 
     #############################################################
     section_header "Getting salt events ..."
-    OF=velum-salt-events.yml
-    OFS=velum-salt-events-summary.txt
+    OF=salt-events.json
+    OFS=salt-events-summary.txt
     plugin_message "JSON stored in $OF - Summary stored in $OFS"
 
     /var/lib/supportutils-plugin-suse-caasp/debug-salt --json_output=$OF --summary_output=$OFS --text-status --no-color
