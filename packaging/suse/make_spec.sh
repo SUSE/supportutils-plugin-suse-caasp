@@ -76,7 +76,11 @@ install -m 0544 debug-salt %{buildroot}/var/lib/supportutils-plugin-suse-caasp/d
 
 %files
 %defattr(-,root,root)
+%if 0%{?suse_version} < 1500
 %doc COPYING.GPLv2
+%else
+%license COPYING.GPLv2
+%endif
 /usr/lib/supportconfig/plugins
 /usr/lib/supportconfig/plugins/suse_caasp
 /usr/share/man/man8/suse-caasp-plugin.8.gz
