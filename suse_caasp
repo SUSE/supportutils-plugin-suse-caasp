@@ -486,3 +486,27 @@ if check_rpm $DOCKER_PKG && on_admin; then
     docker_exec $OF salt-master salt-key
     plugin_message Done
 fi
+
+#############################################################
+section_header "Checking crio service ..."
+OF=crio.txt
+plugin_message "All data stored in $OF"
+
+if check_rpm cri-o && [ -e /usr/bin/crictl ] && [ -S /var/run/crio/crio.sock ]; then
+    rpm_verify $OF cri-o
+    log_cmd $OF 'crictl version'
+    log_cmd $OF 'systemctl status crio.service'
+    log_cmd $OF 'crictl info'
+    log_cmd $OF 'crictl images'
+    log_cmd $OF 'crictl ps --all'
+    conf_files $OF /etc/crictl.yaml
+    find_and_conf_files $OF /etc/crio/
+    for i in $(crictl  ps -a 2>/dev/null | grep -v "COMMAND" | awk '{print $1}');
+    do
+        log_cmd $OF "crictl top $i"
+        log_cmd $OF "crictl logs $i"
+        log_cmd $OF "crictl inspect $i"
+    done
+    log_cmd $OF 'journalctl -u crio'
+fi
+plugin_message Done
