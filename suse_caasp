@@ -338,8 +338,8 @@ plugin_message "All data stored in $OF"
 
 if check_rpm transactional-update; then
     rpm_verify $OF transactional-update
-    log_cmd $OF 'systemctl status transactional-update.service'
-    log_cmd $OF 'systemctl status transactional-update.timer'
+    log_cmd $OF 'systemctl status --full transactional-update.service'
+    log_cmd $OF 'systemctl status --full transactional-update.timer'
     log_cmd $OF 'journalctl -u transactional-update'
     log_cmd $OF 'snapper list'
     log_files $OF 0 /var/log/transactional-update.log
@@ -355,7 +355,7 @@ plugin_message "All data stored in $OF"
 if check_rpm flannel && [ -e /usr/sbin/flanneld ]; then
     rpm_verify $OF flannel
     log_cmd $OF 'flanneld -version'
-    log_cmd $OF 'systemctl status flanneld.service'
+    log_cmd $OF 'systemctl status --full flanneld.service'
     log_cmd $OF 'journalctl -u flanneld'
     conf_files $OF /etc/sysconfig/flanneld
 fi
@@ -376,7 +376,7 @@ if check_rpm etcd && [ -e /usr/bin/etcdctl ]; then
     log_cmd $OF 'etcdctl cluster-health'
     log_cmd $OF 'etcdctl get /flannel/network/config'
     log_cmd $OF 'etcdctl ls /flannel/network/subnets'
-    log_cmd $OF 'systemctl status etcd.service'
+    log_cmd $OF 'systemctl status --full etcd.service'
     log_cmd $OF 'journalctl -u etcd'
     conf_files $OF /etc/sysconfig/etcd
 fi
@@ -403,7 +403,7 @@ if check_rpm kubernetes-master && ! on_admin; then
 
     rpm_verify $OF kubernetes-master
     for K8S_SERVICE in kube-apiserver kube-scheduler kube-controller-manager kube-proxy kubelet; do
-        log_cmd $OF "systemctl status $K8S_SERVICE"
+        log_cmd $OF "systemctl status --full $K8S_SERVICE"
         log_cmd $OF "journalctl -u $K8S_SERVICE"
     done
 fi
@@ -417,7 +417,7 @@ plugin_message "All data stored in $OF"
 if check_rpm salt-minion && [ -e /usr/bin/salt-minion ]; then
     rpm_verify $OF salt-minion
     log_cmd $OF 'salt-minion --versions-report'
-    log_cmd $OF 'systemctl status salt-minion'
+    log_cmd $OF 'systemctl status --full salt-minion'
     log_cmd $OF 'journalctl -u salt-minion'
     conf_files $OF /etc/salt/minion
     conf_files $OF /etc/salt/grains
@@ -495,7 +495,7 @@ plugin_message "All data stored in $OF"
 if check_rpm cri-o && [ -e /usr/bin/crictl ] && [ -S /var/run/crio/crio.sock ]; then
     rpm_verify $OF cri-o
     log_cmd $OF 'crictl version'
-    log_cmd $OF 'systemctl status crio.service'
+    log_cmd $OF 'systemctl status --full crio.service'
     log_cmd $OF 'crictl info'
     log_cmd $OF 'crictl images'
     log_cmd $OF 'crictl ps --all'
