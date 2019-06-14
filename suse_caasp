@@ -5,10 +5,10 @@
 #              about SUSE CaaSP
 # License:     GPLv2
 # Author:      containers-bugowner@suse.de
-# Modified:    2017 May 25
+# Modified:    2019 June 13
 #############################################################
 
-SVER=1.0.0
+SVER=4.0.0
 RCFILE="/usr/lib/supportconfig/resources/scplugin.rc"
 LOG_LINES=10000  # 0 means include the entire file
 
@@ -332,36 +332,6 @@ find_and_log_files () {
 }
 
 #############################################################
-section_header "Checking transactional-update service ..."
-OF=transactional-update.txt
-plugin_message "All data stored in $OF"
-
-if check_rpm transactional-update; then
-    rpm_verify $OF transactional-update
-    log_cmd $OF 'systemctl status --full transactional-update.service'
-    log_cmd $OF 'systemctl status --full transactional-update.timer'
-    log_cmd $OF 'journalctl -u transactional-update'
-    log_cmd $OF 'snapper list'
-    log_files $OF 0 /var/log/transactional-update.log
-    log_files $OF 0 /tmp/transactional-update.\*
-fi
-plugin_message Done
-
-#############################################################
-section_header "Checking flanneld service ..."
-OF=flannel.txt
-plugin_message "All data stored in $OF"
-
-if check_rpm flannel && [ -e /usr/sbin/flanneld ]; then
-    rpm_verify $OF flannel
-    log_cmd $OF 'flanneld -version'
-    log_cmd $OF 'systemctl status --full flanneld.service'
-    log_cmd $OF 'journalctl -u flanneld'
-    conf_files $OF /etc/sysconfig/flanneld
-fi
-plugin_message Done
-
-#############################################################
 section_header "Checking etcd service ..."
 OF=etcd.txt
 plugin_message "All data stored in $OF"
@@ -388,11 +358,15 @@ OF=kubernetes.txt
 plugin_message "All data stored in $OF"
 
 KUBECTL_LOG=/var/log/kubernetes
-if check_rpm kubernetes-master && ! on_admin; then
+if check_rpm kubernetes-client && [ -f /etc/kubernetes/admin.conf ]; then
+    set -a
+    export KUBECONFIG=/etc/kubernetes/admin.conf
+    rpm_verify $OF kubernetes-common
     rpm_verify $OF kubernetes-client
+    rpm_verify $OF kubernetes-kubeadm
     log_cmd $OF 'kubectl version'
     log_cmd $OF 'kubectl api-versions'
-    log_cmd $OF 'kubectl config view -a'
+    log_cmd $OF 'kubectl config view'
     log_cmd $OF 'kubectl get nodes'
     if kubectl cluster-info &>/dev/null; then
         timeout 3 kubectl cluster-info dump --output-directory=$KUBECTL_LOG; echo
@@ -401,91 +375,14 @@ if check_rpm kubernetes-master && ! on_admin; then
     fi
     find_and_conf_files $OF /etc/kubernetes
 
-    rpm_verify $OF kubernetes-master
-    for K8S_SERVICE in kube-apiserver kube-scheduler kube-controller-manager kube-proxy kubelet; do
+    rpm_verify $OF kubernetes-kubelet
+    for K8S_SERVICE in kube-proxy kubelet; do
         log_cmd $OF "systemctl status --full $K8S_SERVICE"
         log_cmd $OF "journalctl -u $K8S_SERVICE"
     done
+    set +a
 fi
 plugin_message Done
-
-#############################################################
-section_header "Checking salt services ..."
-OF=salt-minion.txt
-plugin_message "All data stored in $OF"
-
-if check_rpm salt-minion && [ -e /usr/bin/salt-minion ]; then
-    rpm_verify $OF salt-minion
-    log_cmd $OF 'salt-minion --versions-report'
-    log_cmd $OF 'systemctl status --full salt-minion'
-    log_cmd $OF 'journalctl -u salt-minion'
-    conf_files $OF /etc/salt/minion
-    conf_files $OF /etc/salt/grains
-    find_and_conf_files $OF /etc/salt/minion.d
-    find_and_log_files $OF /var/log/salt
-fi
-plugin_message Done
-
-# checks that only apply to the admin node
-[ -e /usr/bin/docker ] && DOCKER_PKG=`rpm -q --whatprovides /usr/bin/docker`
-if check_rpm $DOCKER_PKG && on_admin; then
-    #############################################################
-    section_header "Getting minion objects ..."
-    OF=velum-minions.yml
-    plugin_message "All data stored in $OF"
-
-    docker_exec $OF velum-dashboard entrypoint.sh bundle exec rails runner 'puts(Minion.all.map(&:to_yaml))'
-    plugin_message Done
-
-    #############################################################
-    section_header "Getting salt events ..."
-    OF=salt-events.json
-    OFS=salt-events-summary.txt
-    plugin_message "JSON stored in $OF - Summary stored in $OFS"
-
-    /var/lib/supportutils-plugin-suse-caasp/debug-salt --json_output=$OF --summary_output=$OFS --text-status --no-color
-    plugin_message Done
-
-    #############################################################
-    section_header "Getting salt pillars ..."
-    OF=velum-salt-pillars.yml
-    plugin_message "All data stored in $OF"
-
-    docker_exec $OF velum-dashboard entrypoint.sh bundle exec rails runner 'puts(Pillar.all.pluck(:pillar,:value).to_yaml)'
-    plugin_message Done
-
-    #############################################################
-    section_header "Checking velum migrations ..."
-    OF=velum-migrations.txt
-    plugin_message "All data stored in $OF"
-
-    docker_exec $OF velum-dashboard entrypoint.sh bundle exec rake db:migrate:status
-    plugin_message Done
-
-    #############################################################
-    section_header "Checking velum routes ..."
-    OF=velum-routes.txt
-    plugin_message "All data stored in $OF"
-
-    docker_exec $OF velum-dashboard entrypoint.sh bundle exec rake routes
-    plugin_message Done
-
-    #############################################################
-    section_header "Listing velum files ..."
-    OF=velum-files.txt
-    plugin_message "All data stored in $OF"
-
-    docker_exec $OF velum-dashboard entrypoint.sh ls -lR
-    plugin_message Done
-
-    #############################################################
-    section_header "Checking salt master ..."
-    OF=salt-master.txt
-    plugin_message "All data stored in $OF"
-
-    docker_exec $OF salt-master salt-key
-    plugin_message Done
-fi
 
 #############################################################
 section_header "Checking crio service ..."
@@ -500,6 +397,7 @@ if check_rpm cri-o && [ -e /usr/bin/crictl ] && [ -S /var/run/crio/crio.sock ]; 
     log_cmd $OF 'crictl images'
     log_cmd $OF 'crictl ps --all'
     conf_files $OF /etc/crictl.yaml
+    conf_files $OF /etc/sysconfig/crio
     find_and_conf_files $OF /etc/crio/
     for i in $(crictl  ps -a 2>/dev/null | grep -v "COMMAND" | awk '{print $1}');
     do
