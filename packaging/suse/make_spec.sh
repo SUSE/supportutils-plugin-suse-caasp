@@ -53,8 +53,7 @@ BuildArch:      noarch
 BuildRequires:  supportconfig-plugin-resource
 Requires:       supportconfig-plugin-resource
 Requires:       supportconfig-plugin-tag
-Requires:       perl-JSON
-Requires:       perl-XML-Bare
+Requires:       supportutils
 
 %description
 Extends supportconfig functionality to include system information about
@@ -72,7 +71,6 @@ install -d %{buildroot}/usr/share/man/man8
 install -d %{buildroot}/var/lib/supportutils-plugin-suse-caasp
 install -m 0544 suse_caasp %{buildroot}/usr/lib/supportconfig/plugins
 install -m 0644 suse-caasp-plugin.8.gz %{buildroot}/usr/share/man/man8/suse-caasp-plugin.8.gz
-install -m 0544 debug-salt %{buildroot}/var/lib/supportutils-plugin-suse-caasp/debug-salt
 
 %files
 %defattr(-,root,root)
@@ -84,8 +82,6 @@ install -m 0544 debug-salt %{buildroot}/var/lib/supportutils-plugin-suse-caasp/d
 /usr/lib/supportconfig/plugins
 /usr/lib/supportconfig/plugins/suse_caasp
 /usr/share/man/man8/suse-caasp-plugin.8.gz
-/var/lib/supportutils-plugin-suse-caasp
-/var/lib/supportutils-plugin-suse-caasp/debug-salt
 
 %changelog
 EOF

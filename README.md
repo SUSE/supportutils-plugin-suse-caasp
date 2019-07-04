@@ -2,50 +2,34 @@
 
 Supportconfig plugin for CaaSP project.
 
+## Information which have to be collected by supportconfig from CaaSP installation
 
+### Cri-o service
 
-# Information which have to be collected by supportconfig from CaaSP installation
-
-## Cri-o service
-
-### Output from commands
+Output from commands
 ```
 crictl version
-systemctl status --full docker.service
+systemctl status --full crio.service
 crictl info
 crictl images
 crictl ps --all
 journalctl -u crio
 ```
 
-### Configuration files
+Configuration files
 * /etc/crictl.yaml
 * /etc/sysconfig/crio
 
-### Logs from containers
+Logs from containers
 ```
 crictl top
 crictl logs
 crictl inspect
 ```
 
-## Etcd service
-### Output from commands
-```
-etcdctl --version
-etcdctl member list
-etcdctl cluster-health
-etcdctl get /flannel/network/config
-etcdctl ls /flannel/network/subnets
-systemctl status etcd.service
-journalctl -u etcd
-```
+### Kubernetes service
 
-### Configuration files
-* /etc/sysconfig/etcd
-
-## Kubernetes service
-### Output from commands
+Output from commands
 ```
 kubectl config view
 kubectl version
@@ -59,10 +43,10 @@ done
 journalctl -u kubelet
 ```
 
-### Configuration files
+Configuration files
 * /etc/kubernetes/*
 
-### Logs from containers
+Logs from containers
 ```
 kubectl top 
 kubectl logs
