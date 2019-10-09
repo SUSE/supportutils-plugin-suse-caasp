@@ -332,24 +332,35 @@ find_and_log_files () {
 }
 
 #############################################################
-section_header "Checking etcd service ..."
+section_header "Checking etcd cluster ..."
 OF=etcd.txt
 plugin_message "All data stored in $OF"
 
-set -a
-[ -f /etc/sysconfig/etcdctl ] && source /etc/sysconfig/etcdctl
-set +a
-if check_rpm etcd && [ -e /usr/bin/etcdctl ]; then
-    rpm_verify $OF etcd
-    log_cmd $OF 'etcdctl --version'
-    log_cmd $OF 'etcdctl member list'
-    log_cmd $OF 'etcdctl cluster-health'
-    log_cmd $OF 'etcdctl get /flannel/network/config'
-    log_cmd $OF 'etcdctl ls /flannel/network/subnets'
-    log_cmd $OF 'systemctl status --full etcd.service'
-    log_cmd $OF 'journalctl -u etcd'
-    conf_files $OF /etc/sysconfig/etcd
+if check_rpm curl && [ -e /usr/bin/curl ]; then
+    rpm_verify $OF curl
+    # Run this only on the CaaSP Master nodes
+    if crictl pods | grep etcd &> /dev/null; then
+        # Health check:
+        log_cmd $OF 'curl -Ls --cacert /etc/kubernetes/pki/etcd/ca.crt --key /etc/kubernetes/pki/etcd/server.key --cert /etc/kubernetes/pki/etcd/server.crt https://localhost:2379/health'
+        # ETCD member list
+        log_cmd $OF 'curl -Ls --cacert /etc/kubernetes/pki/etcd/ca.crt --key /etc/kubernetes/pki/etcd/server.key --cert /etc/kubernetes/pki/etcd/server.crt https://localhost:2379/v2/members'
+        # Leader information (avail. only from the leader node)
+        log_cmd $OF 'curl -Ls --cacert /etc/kubernetes/pki/etcd/ca.crt --key /etc/kubernetes/pki/etcd/server.key --cert /etc/kubernetes/pki/etcd/server.crt https://localhost:2379/v2/stats/leader'
+        # Current member information
+        log_cmd $OF 'curl -Ls --cacert /etc/kubernetes/pki/etcd/ca.crt --key /etc/kubernetes/pki/etcd/server.key --cert /etc/kubernetes/pki/etcd/server.crt https://localhost:2379/v2/stats/self'
+        # Statistics
+        log_cmd $OF 'curl -Ls --cacert /etc/kubernetes/pki/etcd/ca.crt --key /etc/kubernetes/pki/etcd/server.key --cert /etc/kubernetes/pki/etcd/server.crt https://localhost:2379/v2/stats/store'
+         # Metrics
+        log_cmd $OF 'curl -Ls --cacert /etc/kubernetes/pki/etcd/ca.crt --key /etc/kubernetes/pki/etcd/server.key --cert /etc/kubernetes/pki/etcd/server.crt https://localhost:2379/metrics'
+        # Fetch the etcd container ID
+        etcdcontainer=$(crictl ps --label io.kubernetes.container.name=etcd --quiet)
+        # Disk/Network latency
+        log_cmd $OF "crictl exec $etcdcontainer sh -c \"ETCDCTL_ENDPOINTS='https://127.0.0.1:2379' ETCDCTL_CACERT='/etc/kubernetes/pki/etcd/ca.crt' ETCDCTL_CERT='/etc/kubernetes/pki/etcd/server.crt' ETCDCTL_KEY='/etc/kubernetes/pki/etcd/server.key' ETCDCTL_API=3 etcdctl check perf\""
+        # ETCD daemon logs
+        log_cmd $OF "crictl logs $etcdcontainer"
+    fi
 fi
+
 plugin_message Done
 
 #############################################################
