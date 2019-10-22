@@ -340,7 +340,7 @@ if check_rpm curl && [ -e /usr/bin/curl ]; then
     rpm_verify $OF curl
     # Run this only on the CaaSP Master nodes
     if crictl pods | grep etcd &> /dev/null; then
-        # Health check:
+        # Health check
         log_cmd $OF 'curl -Ls --cacert /etc/kubernetes/pki/etcd/ca.crt --key /etc/kubernetes/pki/etcd/server.key --cert /etc/kubernetes/pki/etcd/server.crt https://localhost:2379/health'
         # ETCD member list
         log_cmd $OF 'curl -Ls --cacert /etc/kubernetes/pki/etcd/ca.crt --key /etc/kubernetes/pki/etcd/server.key --cert /etc/kubernetes/pki/etcd/server.crt https://localhost:2379/v2/members'
@@ -357,7 +357,11 @@ if check_rpm curl && [ -e /usr/bin/curl ]; then
         # Disk/Network latency
         log_cmd $OF "crictl exec $etcdcontainer sh -c \"ETCDCTL_ENDPOINTS='https://127.0.0.1:2379' ETCDCTL_CACERT='/etc/kubernetes/pki/etcd/ca.crt' ETCDCTL_CERT='/etc/kubernetes/pki/etcd/server.crt' ETCDCTL_KEY='/etc/kubernetes/pki/etcd/server.key' ETCDCTL_API=3 etcdctl check perf\""
         # ETCD daemon logs
-        log_cmd $OF "crictl logs $etcdcontainer"
+        log_cmd $OF "crictl logs -t $etcdcontainer"
+        log_cmd $OF "crictl stats --id $etcdcontainer"
+        # ETCD pod
+        etcdpod=$(crictl ps | grep etcd | awk -F ' ' '{ print $9 }')
+        log_cmd $OF "crictl inspectp $etcdpod"
     fi
 fi
 
@@ -378,24 +382,91 @@ if check_rpm kubernetes-client && [ -f /etc/kubernetes/admin.conf ]; then
     log_cmd $OF 'kubectl version'
     log_cmd $OF 'kubectl api-versions'
     log_cmd $OF 'kubectl config view'
+    log_cmd $OF 'kubectl -n kube-system get pods'
+    log_cmd $OF 'kubectl get events --sort-by=.metadata.creationTimestamp'
     log_cmd $OF 'kubectl get nodes'
-    if kubectl cluster-info &>/dev/null; then
-        timeout 3 kubectl cluster-info dump --output-directory=$KUBECTL_LOG; echo
-        find_and_log_files $OF $KUBECTL_LOG
-        rm ${KUBECTL_LOG} -fr
-    fi
-    find_and_conf_files $OF /etc/kubernetes
-
-    rpm_verify $OF kubernetes-kubelet
-    for K8S_SERVICE in kube-proxy kubelet; do
-        log_cmd $OF "systemctl status --full $K8S_SERVICE"
-        log_cmd $OF "journalctl -u $K8S_SERVICE"
-    done
+    log_cmd $OF 'kubectl get all -A'
+    log_cmd $OF 'kubectl get nodes -o yaml'
     set +a
 fi
 plugin_message Done
 
 #############################################################
+section_header "Checking kubernetes-cluster-info ..."
+OF=kubernetes-cluster-info.txt
+plugin_message "All data stored in $OF"
+
+KUBECTL_LOG=/var/log/kubernetes
+if check_rpm kubernetes-client && [ -f /etc/kubernetes/admin.conf ]; then
+    set -a
+    if kubectl -n kube-system cluster-info dump &>/dev/null; then
+        timeout 3 kubectl cluster-info dump --output-directory=$KUBECTL_LOG; echo
+        find_and_log_files $OF $KUBECTL_LOG
+        rm ${KUBECTL_LOG} -fr
+    fi
+    find_and_conf_files $OF /etc/kubernetes
+fi
+plugin_message Done
+
+#############################################################
+
+section_header "Checking kubelet service ..."
+OF=kubelet.txt
+plugin_message "All data stored in $OF"
+
+# Fetch kubelet logs
+if check_rpm kubernetes-kubelet; then
+    rpm_verify $OF kubernetes-kubelet
+    log_cmd $OF "systemctl status --full kubelet"
+    log_cmd $OF "journalctl -u kubelet"
+    log_cmd $OF "cat /var/lib/kubelet/config.yaml"
+    # Should be applicable only to masters
+    find_and_log_files $OF "/etc/kubernetes/manifests"
+fi
+plugin_message Done
+
+#############################################################
+
+for service in oidc-gangway oidc-dex \
+                cilium-agent cilium-operator \
+                kured coredns \
+                kube-apiserver kube-proxy kube-scheduler kube-controller-manager; do
+    section_header "Checking $service container service ..."
+    OF="$service.txt"
+    plugin_message "All data stored in $OF"
+
+    # Fetch logs
+    if crictl ps | grep "$service" &> /dev/null; then
+        # Fetch the container ID
+        container=$(crictl ps --label io.kubernetes.container.name="$service" --quiet)
+        # Gather information about container
+        log_cmd $OF "crictl logs -t $container"
+        log_cmd $OF "crictl inspect $container"
+        log_cmd $OF "crictl stats --id $container"
+        # Gather information about the Pod
+        pod=$(crictl ps | grep "$service" | awk -F ' ' '{ print $9 }')
+        log_cmd $OF "crictl inspectp $pod"
+    fi
+    plugin_message Done
+done
+
+#############################################################
+
+section_header "Checking kube-system namespace ..."
+OF=kube-system.txt
+plugin_message "All data stored in $OF"
+
+KUBECTL_LOG=/var/log/kubernetes
+if check_rpm kubernetes-client && [ -f /etc/kubernetes/admin.conf ]; then
+    set -a
+    export KUBECONFIG=/etc/kubernetes/admin.conf
+    rpm_verify $OF kubernetes-client
+    log_cmd $OF "kubectl get all -n kube-system -o yaml"
+fi
+plugin_message Done
+
+#############################################################
+
 section_header "Checking crio service ..."
 OF=crio.txt
 plugin_message "All data stored in $OF"
@@ -407,12 +478,14 @@ if check_rpm cri-o && [ -e /usr/bin/crictl ] && [ -S /var/run/crio/crio.sock ]; 
     log_cmd $OF 'crictl info'
     log_cmd $OF 'crictl images'
     log_cmd $OF 'crictl ps --all'
+    log_cmd $OF 'crictl stats --all'
     conf_files $OF /etc/crictl.yaml
     conf_files $OF /etc/sysconfig/crio
+    conf_files $OF /etc/crio/crio.conf
     find_and_conf_files $OF /etc/crio/
-    for i in $(crictl  ps -a 2>/dev/null | grep -v "COMMAND" | awk '{print $1}');
+    for i in $(crictl  ps -a 2>/dev/null | grep -v "CONTAINER" | awk '{print $1}');
     do
-        log_cmd $OF "crictl top $i"
+        log_cmd $OF "crictl stats --id $i"
         log_cmd $OF "crictl logs $i"
         log_cmd $OF "crictl inspect $i"
     done
