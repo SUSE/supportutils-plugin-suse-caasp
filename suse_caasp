@@ -5,7 +5,7 @@
 #              about SUSE CaaSP
 # License:     GPLv2
 # Author:      containers-bugowner@suse.de
-# Modified:    2019 June 13
+# Modified:    2019 October 25
 #############################################################
 
 SVER=4.0.0
@@ -19,79 +19,7 @@ if [ -s $RCFILE ]; then
     fi
 fi
 
-pconf_files() {
-    _log_files 0 "Configuration File" "$@"
-}
-
-plog_files() {
-    loglines="$1"
-    shift
-    _log_files "$loglines" "Log File" "$@"
-}
-
-_log_files() {
-    loglines="$1" title="$2"
-    shift 2
-
-    for file in "$@"; do
-        _log_file "$loglines" "$title" "$file"
-    done
-}
-
-_log_file() {
-    loglines="$1" title="$2" file="$3"
-
-    case "$file" in
-        *.tbz|*.bz2|*.gz|*.zip|*.xz)
-            continue
-            ;;
-    esac
-
-    if ! [ -f "$file" ]; then
-        plugin_tag "$title" "$file - File not found"
-        continue
-    fi
-
-    if [ "$loglines" -eq 0 ]; then
-        plugin_tag "$title" "$file"
-    else
-        plugin_tag "$title" "$file - Last $loglines Lines"
-    fi
-
-    _capture "$loglines" "$file" | _capture_filter
-    echo
-}
-
-_capture() {
-    loglines="$1" file="$2"
-    if [ "$loglines" -eq 0 ]; then
-        cat "$file"
-    else
-        tail -"$loglines" "$file"
-    fi
-}
-
 HIDDEN='<<HIDDEN BY SUPPORTCONFIG PLUGIN>>'
-
-_capture_filter() {
-    sed_args=(
-        # "password": "s3kr1t",
-        # "PASWORD": "s3kr1t",
-        -e 's/\("\([a-z_]\+\)\?\(passw\(or\)\?d\|PASWORD\)":\? \+"\+\)[^"]\+"/\1'"$CENSORED"'"/gi'
-    )
-    if (( ADD_OPTION_LOGS )); then
-        sed_args+=( -e 's/^M//g' )
-    else
-        sed_args+=(
-            -e '/^[[:space:]]*#/d'
-            -e '/^[[:space:]]*;/d'
-            -e '/^[[:space:]]*\/\//d'
-            -e 's/^M//g'
-            -e '/^$/d'
-        )
-    fi
-    sed "${sed_args[@]}"
-}
 
 check_rpm() {
         #echo
@@ -166,39 +94,6 @@ conf_files() {
         done
 }
 
-# Input: logfilename lines logfiles...
-# If lines = 0, includes the entire log file
-log_files() {
-        LOGFILE=$LOG/$1
-        shift
-        LOGLINES=$1
-        shift
-        for CONF in $@
-        do
-                BAD_FILE=$(echo "$CONF" | egrep "\.tbz$|\.bz2$|\.gz$|\.zip$|\.xz$")
-                if [ -n "$BAD_FILE" ]; then
-                        continue
-                fi
-                echo "#==[ Log File ]=====================================#" >> $LOGFILE
-                CONF=$(echo $CONF | sed -e "s/%7B%20%7D%7B%20%7D/ /g")
-                if [ -f "$CONF" ]; then
-                        wait_trace_on "$CONF"
-                        if [ $LOGLINES -eq 0 ]; then
-                                echo "# $CONF" >> $LOGFILE
-                                sed -e 's/\r//g' "$CONF" >> $LOGFILE
-                        else
-                                echo "# $CONF - Last $LOGLINES Lines" >> $LOGFILE
-                                tail -$LOGLINES "$CONF" | sed -e 's/\r//g' >> $LOGFILE
-                        fi
-                        echo >> $LOGFILE
-                        wait_trace_off
-                else
-                        echo "# $CONF - File not found" >> $LOGFILE
-                fi
-                echo >> $LOGFILE
-        done
-}
-
 # Input: logfilename command
 log_cmd() {
         EXIT_STATUS=0
@@ -257,31 +152,6 @@ rpm_verify() {
         fi
 }
 
-# Input logfilename containername command
-docker_exec() {
-        LOGFILE=$LOG/$1
-        CONTAINERNAME=$2
-        shift; shift;
-        COMMAND="$@"
-        CONTAINER=$(docker ps | grep $CONTAINERNAME | awk '{print $1}')
-
-        echo "#==[ $COMMAND ]==" >> $LOGFILE
-        timeout 300 docker exec $CONTAINER $COMMAND >> $LOGFILE 2>&1
-        EXIT_STATUS=$?
-
-        echo >> $LOGFILE
-        return $EXIT_STATUS
-}
-
-# Check if supportconfig gets run on the CaaSP Admin
-on_admin() {
-        if $(docker ps -a | grep -q velum-dashboard); then
-                return 0
-        else
-                return 1
-        fi
-}
-
 #############################################################
 section_header "Supportconfig Plugin for SUSE CaaSP, v${SVER}"
 # The plugin already hardcodes a reference to this directory above, so we're
@@ -289,30 +159,6 @@ section_header "Supportconfig Plugin for SUSE CaaSP, v${SVER}"
 
 _find_uncompressed () {
     find "$@" ! -name \*.gz ! -name \*.bz2 ! -name \*.xz ! -name \*.key ! -name \*.crt ! -name \*.pub ! -name \*.pem
-}
-
-find_and_pconf_files () {
-    [ -d "$1" ] || return 0
-    files=$( _find_uncompressed "$@" )
-    if [ -n "$files" ]; then
-        pconf_files $files
-    fi
-}
-
-find_and_plog_files () {
-    [ -d "$1" ] || return 0
-    files=$( _find_uncompressed "$@" )
-    if [ -n "$files" ]; then
-        plog_files "$LOG_LINES" $files
-    fi
-}
-
-find_and_plog_files_0 () {
-    [ -d "$1" ] || return 0
-    files=$( _find_uncompressed "$@" )
-    if [ -n "$files" ]; then
-        plog_files 0 $files
-    fi
 }
 
 find_and_conf_files () {
@@ -399,12 +245,14 @@ plugin_message "All data stored in $OF"
 KUBECTL_LOG=/var/log/kubernetes
 if check_rpm kubernetes-client && [ -f /etc/kubernetes/admin.conf ]; then
     set -a
+    export KUBECONFIG=/etc/kubernetes/admin.conf
     if kubectl -n kube-system cluster-info dump &>/dev/null; then
         timeout 3 kubectl cluster-info dump --output-directory=$KUBECTL_LOG; echo
         find_and_log_files $OF $KUBECTL_LOG
         rm ${KUBECTL_LOG} -fr
     fi
     find_and_conf_files $OF /etc/kubernetes
+    set +a
 fi
 plugin_message Done
 
@@ -462,6 +310,7 @@ if check_rpm kubernetes-client && [ -f /etc/kubernetes/admin.conf ]; then
     export KUBECONFIG=/etc/kubernetes/admin.conf
     rpm_verify $OF kubernetes-client
     log_cmd $OF "kubectl get all -n kube-system -o yaml"
+    set +a
 fi
 plugin_message Done
 
