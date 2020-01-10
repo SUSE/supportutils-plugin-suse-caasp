@@ -238,6 +238,20 @@ fi
 plugin_message Done
 
 #############################################################
+section_header "Checking SSL certificates ..."
+OF=kubernetes-certs.txt
+plugin_message "All data stored in $OF"
+
+# Check expiration date for SSL certificates used by kubernetes cluster
+if [ -d /etc/kubernetes/pki ]; then
+    for certificate in /etc/kubernetes/pki/*.crt
+    do
+        log_cmd $OF "openssl x509 -enddate -noout -in $certificate"
+    done
+fi
+plugin_message Done
+
+#############################################################
 section_header "Checking kubernetes-cluster-info ..."
 OF=kubernetes-cluster-info.txt
 plugin_message "All data stored in $OF"
@@ -257,7 +271,6 @@ fi
 plugin_message Done
 
 #############################################################
-
 section_header "Checking kubelet service ..."
 OF=kubelet.txt
 plugin_message "All data stored in $OF"
@@ -274,7 +287,6 @@ fi
 plugin_message Done
 
 #############################################################
-
 for service in oidc-gangway oidc-dex \
                 cilium-agent cilium-operator \
                 kured coredns \
@@ -299,7 +311,6 @@ for service in oidc-gangway oidc-dex \
 done
 
 #############################################################
-
 section_header "Checking kube-system namespace ..."
 OF=kube-system.txt
 plugin_message "All data stored in $OF"
@@ -315,7 +326,6 @@ fi
 plugin_message Done
 
 #############################################################
-
 section_header "Checking crio service ..."
 OF=crio.txt
 plugin_message "All data stored in $OF"
