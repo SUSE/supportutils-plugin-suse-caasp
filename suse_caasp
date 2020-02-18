@@ -188,18 +188,16 @@ if check_rpm curl && [ -e /usr/bin/curl ]; then
     if crictl pods | grep etcd &> /dev/null; then
         # Health check
         log_cmd $OF 'curl -Ls --cacert /etc/kubernetes/pki/etcd/ca.crt --key /etc/kubernetes/pki/etcd/server.key --cert /etc/kubernetes/pki/etcd/server.crt https://localhost:2379/health'
-        # ETCD member list
-        log_cmd $OF 'curl -Ls --cacert /etc/kubernetes/pki/etcd/ca.crt --key /etc/kubernetes/pki/etcd/server.key --cert /etc/kubernetes/pki/etcd/server.crt https://localhost:2379/v2/members'
-        # Leader information (avail. only from the leader node)
-        log_cmd $OF 'curl -Ls --cacert /etc/kubernetes/pki/etcd/ca.crt --key /etc/kubernetes/pki/etcd/server.key --cert /etc/kubernetes/pki/etcd/server.crt https://localhost:2379/v2/stats/leader'
-        # Current member information
-        log_cmd $OF 'curl -Ls --cacert /etc/kubernetes/pki/etcd/ca.crt --key /etc/kubernetes/pki/etcd/server.key --cert /etc/kubernetes/pki/etcd/server.crt https://localhost:2379/v2/stats/self'
-        # Statistics
-        log_cmd $OF 'curl -Ls --cacert /etc/kubernetes/pki/etcd/ca.crt --key /etc/kubernetes/pki/etcd/server.key --cert /etc/kubernetes/pki/etcd/server.crt https://localhost:2379/v2/stats/store'
-         # Metrics
-        log_cmd $OF 'curl -Ls --cacert /etc/kubernetes/pki/etcd/ca.crt --key /etc/kubernetes/pki/etcd/server.key --cert /etc/kubernetes/pki/etcd/server.crt https://localhost:2379/metrics'
+        # Version check
+        log_cmd $OF 'curl -Ls --cacert /etc/kubernetes/pki/etcd/ca.crt --key /etc/kubernetes/pki/etcd/server.key --cert /etc/kubernetes/pki/etcd/server.crt https://localhost:2379/version'
         # Fetch the etcd container ID
         etcdcontainer=$(crictl ps --label io.kubernetes.container.name=etcd --quiet)
+        # Member list
+        log_cmd $OF "crictl exec $etcdcontainer sh -c \"ETCDCTL_ENDPOINTS='https://127.0.0.1:2379' ETCDCTL_CACERT='/etc/kubernetes/pki/etcd/ca.crt' ETCDCTL_CERT='/etc/kubernetes/pki/etcd/server.crt' ETCDCTL_KEY='/etc/kubernetes/pki/etcd/server.key' ETCDCTL_API=3 etcdctl member list --write-out=fields\""
+        # Endpoint status
+        log_cmd $OF "crictl exec $etcdcontainer sh -c \"ETCDCTL_ENDPOINTS='https://127.0.0.1:2379' ETCDCTL_CACERT='/etc/kubernetes/pki/etcd/ca.crt' ETCDCTL_CERT='/etc/kubernetes/pki/etcd/server.crt' ETCDCTL_KEY='/etc/kubernetes/pki/etcd/server.key' ETCDCTL_API=3 etcdctl endpoint status --write-out=fields\""
+         # Metrics
+        log_cmd $OF 'curl -Ls --cacert /etc/kubernetes/pki/etcd/ca.crt --key /etc/kubernetes/pki/etcd/server.key --cert /etc/kubernetes/pki/etcd/server.crt https://localhost:2379/metrics'
         # Disk/Network latency
         log_cmd $OF "crictl exec $etcdcontainer sh -c \"ETCDCTL_ENDPOINTS='https://127.0.0.1:2379' ETCDCTL_CACERT='/etc/kubernetes/pki/etcd/ca.crt' ETCDCTL_CERT='/etc/kubernetes/pki/etcd/server.crt' ETCDCTL_KEY='/etc/kubernetes/pki/etcd/server.key' ETCDCTL_API=3 etcdctl check perf\""
         # ETCD daemon logs
