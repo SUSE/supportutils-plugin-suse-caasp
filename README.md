@@ -52,3 +52,11 @@ kubectl top
 kubectl logs
 kubectl describe
 ```
+
+### GPU drivers
+
+Output from commands
+```
+nvidia-smi
+nvidia-container-cli -k -d /dev/stderr --user=root:video info
+```
