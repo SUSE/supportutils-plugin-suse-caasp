@@ -8,7 +8,7 @@
 # Modified:    2019 October 25
 #############################################################
 
-SVER=4.0.0
+SVER=5.0.0
 RCFILE="/usr/lib/supportconfig/resources/scplugin.rc"
 LOG_LINES=10000  # 0 means include the entire file
 
@@ -347,5 +347,24 @@ if check_rpm cri-o && [ -e /usr/bin/crictl ] && [ -S /var/run/crio/crio.sock ]; 
         log_cmd $OF "crictl inspect $i"
     done
     log_cmd $OF 'journalctl -u crio'
+fi
+plugin_message Done
+
+#############################################################
+section_header "Checking GPU information ..."
+OF=gpu.txt
+plugin_message "All data stored in $OF"
+
+NVIDIA_SMI="/usr/bin/nvidia-smi"
+NVIDIA_CONTAINER_CLI="/usr/bin/nvidia-container-cli"
+if [ -x "$NVIDIA_SMI" ]
+then
+    log_cmd "$OF" "$NVIDIA_SMI -q"
+    if [ -x "$NVIDIA_CONTAINER_CLI" ] 
+    then
+        log_cmd "$OF" "$NVIDIA_CONTAINER_CLI -k -d /dev/stderr --user=root:video info"
+    fi
+else
+    log_cmd "$OF" 'echo "nvidia drivers not found"'
 fi
 plugin_message Done
