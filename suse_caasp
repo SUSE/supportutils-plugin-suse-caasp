@@ -26,7 +26,7 @@ check_rpm() {
         RPM_NAME=$1
         #echo "#==[ Checking RPM ]=================================#"
         #echo "rpm -q $RPM_NAME"
-        if rpm -q $RPM_NAME &>/dev/null; then
+        if rpm -qa $RPM_NAME &>/dev/null; then
                 #echo "Status: Package is installed"
                 return 0
         else
@@ -94,6 +94,39 @@ conf_files() {
         done
 }
 
+# Input: logfilename lines logfiles...
+# If lines = 0, includes the entire log file
+log_files() {
+        LOGFILE=$LOG/$1
+        shift
+        LOGLINES=$1
+        shift
+        for CONF in $@
+        do
+                BAD_FILE=$(echo "$CONF" | egrep "\.tbz$|\.bz2$|\.gz$|\.zip$|\.xz$")
+                if [ -n "$BAD_FILE" ]; then
+                        continue
+                fi
+                echo "#==[ Log File ]=====================================#" >> $LOGFILE
+                CONF=$(echo $CONF | sed -e "s/%7B%20%7D%7B%20%7D/ /g")
+                if [ -f "$CONF" ]; then
+                        wait_trace_on "$CONF"
+                        if [ $LOGLINES -eq 0 ]; then
+                                echo "# $CONF" >> $LOGFILE
+                                sed -e 's/\r//g' "$CONF" >> $LOGFILE
+                        else
+                                echo "# $CONF - Last $LOGLINES Lines" >> $LOGFILE
+                                tail -$LOGLINES "$CONF" | sed -e 's/\r//g' >> $LOGFILE
+                        fi
+                        echo >> $LOGFILE
+                        wait_trace_off
+                else
+                        echo "# $CONF - File not found" >> $LOGFILE
+                fi
+                echo >> $LOGFILE
+        done
+}
+
 # Input: logfilename command
 log_cmd() {
         EXIT_STATUS=0
@@ -126,9 +159,9 @@ rpm_verify() {
         LOGFILE=$LOG/$1
         INPUT_RPM=$2
         echo "#==[ Verification ]=================================#" >> $LOGFILE
-        if rpm -q $INPUT_RPM &>/dev/null
+        if rpm -qa $INPUT_RPM &>/dev/null
         then
-                for RPM in $(rpm -q $INPUT_RPM)
+                for RPM in $(rpm -qa $INPUT_RPM)
                 do
                         echo "# rpm -V $RPM" >> $LOGFILE
                         wait_trace_on "rpm -V $RPM"
@@ -217,19 +250,19 @@ OF=kubernetes.txt
 plugin_message "All data stored in $OF"
 
 KUBECTL_LOG=/var/log/kubernetes
-if check_rpm kubernetes-client && [ -f /etc/kubernetes/admin.conf ]; then
+if check_rpm kubernetes-*client && [ -f /etc/kubernetes/admin.conf ]; then
     set -a
     export KUBECONFIG=/etc/kubernetes/admin.conf
-    rpm_verify $OF kubernetes-common
-    rpm_verify $OF kubernetes-client
-    rpm_verify $OF kubernetes-kubeadm
+    rpm_verify $OF kubernetes-*client
+    rpm_verify $OF kubernetes-*kubelet
+    rpm_verify $OF kubernetes-*kubeadm
     log_cmd $OF 'kubectl version'
     log_cmd $OF 'kubectl api-versions'
     log_cmd $OF 'kubectl config view'
-    log_cmd $OF 'kubectl -n kube-system get pods'
+    log_cmd $OF 'kubectl -n kube-system get pods -o wide'
     log_cmd $OF 'kubectl get events --sort-by=.metadata.creationTimestamp'
-    log_cmd $OF 'kubectl get nodes'
     log_cmd $OF 'kubectl get all -A'
+    log_cmd $OF 'kubectl get nodes -o wide'
     log_cmd $OF 'kubectl get nodes -o yaml'
     set +a
 fi
@@ -255,7 +288,7 @@ OF=kubernetes-cluster-info.txt
 plugin_message "All data stored in $OF"
 
 KUBECTL_LOG=/var/log/kubernetes
-if check_rpm kubernetes-client && [ -f /etc/kubernetes/admin.conf ]; then
+if check_rpm kubernetes-*client && [ -f /etc/kubernetes/admin.conf ]; then
     set -a
     export KUBECONFIG=/etc/kubernetes/admin.conf
     if kubectl -n kube-system cluster-info dump &>/dev/null; then
@@ -274,8 +307,8 @@ OF=kubelet.txt
 plugin_message "All data stored in $OF"
 
 # Fetch kubelet logs
-if check_rpm kubernetes-kubelet; then
-    rpm_verify $OF kubernetes-kubelet
+if check_rpm kubernetes-*kubelet; then
+    rpm_verify $OF kubernetes-*kubelet
     log_cmd $OF "systemctl status --full kubelet"
     log_cmd $OF "journalctl -u kubelet"
     log_cmd $OF "cat /var/lib/kubelet/config.yaml"
@@ -314,10 +347,10 @@ OF=kube-system.txt
 plugin_message "All data stored in $OF"
 
 KUBECTL_LOG=/var/log/kubernetes
-if check_rpm kubernetes-client && [ -f /etc/kubernetes/admin.conf ]; then
+if check_rpm kubernetes-*client && [ -f /etc/kubernetes/admin.conf ]; then
     set -a
     export KUBECONFIG=/etc/kubernetes/admin.conf
-    rpm_verify $OF kubernetes-client
+    rpm_verify $OF kubernetes-*client
     log_cmd $OF "kubectl get all -n kube-system -o yaml"
     set +a
 fi
@@ -328,8 +361,8 @@ section_header "Checking crio service ..."
 OF=crio.txt
 plugin_message "All data stored in $OF"
 
-if check_rpm cri-o && [ -e /usr/bin/crictl ] && [ -S /var/run/crio/crio.sock ]; then
-    rpm_verify $OF cri-o
+if check_rpm cri-o-[1-9].[1-9][0-9] && [ -e /usr/bin/crictl ] && [ -S /var/run/crio/crio.sock ]; then
+    rpm_verify $OF cri-o-[1-9].[1-9][0-9]
     log_cmd $OF 'crictl version'
     log_cmd $OF 'systemctl status --full crio.service'
     log_cmd $OF 'crictl info'
