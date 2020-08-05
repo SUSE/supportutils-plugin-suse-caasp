@@ -8,7 +8,7 @@
 # Modified:    2019 October 25
 #############################################################
 
-SVER=5.0.0
+SVER=4.5.0
 RCFILE="/usr/lib/supportconfig/resources/scplugin.rc"
 LOG_LINES=10000  # 0 means include the entire file
 
