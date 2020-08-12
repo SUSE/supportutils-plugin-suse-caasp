@@ -260,6 +260,7 @@ if check_rpm "kubernetes-*client" && [ -f /etc/kubernetes/admin.conf ]; then
     log_cmd $OF 'kubectl api-versions'
     log_cmd $OF 'kubectl config view'
     log_cmd $OF 'kubectl -n kube-system get pods -o wide'
+    log_cmd $OF 'kubectl -n kube-system describe pods'
     log_cmd $OF 'kubectl get events --sort-by=.metadata.creationTimestamp'
     log_cmd $OF 'kubectl get all -A'
     log_cmd $OF 'kubectl get nodes -o wide'
