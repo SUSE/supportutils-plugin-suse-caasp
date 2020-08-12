@@ -250,12 +250,12 @@ OF=kubernetes.txt
 plugin_message "All data stored in $OF"
 
 KUBECTL_LOG=/var/log/kubernetes
-if check_rpm kubernetes-*client && [ -f /etc/kubernetes/admin.conf ]; then
+if check_rpm "kubernetes-*client" && [ -f /etc/kubernetes/admin.conf ]; then
     set -a
     export KUBECONFIG=/etc/kubernetes/admin.conf
-    rpm_verify $OF kubernetes-*client
-    rpm_verify $OF kubernetes-*kubelet
-    rpm_verify $OF kubernetes-*kubeadm
+    rpm_verify $OF "kubernetes-*client"
+    rpm_verify $OF "kubernetes-*kubelet"
+    rpm_verify $OF "kubernetes-*kubeadm"
     log_cmd $OF 'kubectl version'
     log_cmd $OF 'kubectl api-versions'
     log_cmd $OF 'kubectl config view'
@@ -288,7 +288,7 @@ OF=kubernetes-cluster-info.txt
 plugin_message "All data stored in $OF"
 
 KUBECTL_LOG=/var/log/kubernetes
-if check_rpm kubernetes-*client && [ -f /etc/kubernetes/admin.conf ]; then
+if check_rpm "kubernetes-*client" && [ -f /etc/kubernetes/admin.conf ]; then
     set -a
     export KUBECONFIG=/etc/kubernetes/admin.conf
     if kubectl -n kube-system cluster-info dump &>/dev/null; then
@@ -307,8 +307,8 @@ OF=kubelet.txt
 plugin_message "All data stored in $OF"
 
 # Fetch kubelet logs
-if check_rpm kubernetes-*kubelet; then
-    rpm_verify $OF kubernetes-*kubelet
+if check_rpm "kubernetes-*kubelet"; then
+    rpm_verify $OF "kubernetes-*kubelet"
     log_cmd $OF "systemctl status --full kubelet"
     log_cmd $OF "journalctl -u kubelet"
     log_cmd $OF "cat /var/lib/kubelet/config.yaml"
@@ -347,10 +347,10 @@ OF=kube-system.txt
 plugin_message "All data stored in $OF"
 
 KUBECTL_LOG=/var/log/kubernetes
-if check_rpm kubernetes-*client && [ -f /etc/kubernetes/admin.conf ]; then
+if check_rpm "kubernetes-*client" && [ -f /etc/kubernetes/admin.conf ]; then
     set -a
     export KUBECONFIG=/etc/kubernetes/admin.conf
-    rpm_verify $OF kubernetes-*client
+    rpm_verify $OF "kubernetes-*client"
     log_cmd $OF "kubectl get all -n kube-system -o yaml"
     set +a
 fi
@@ -361,8 +361,8 @@ section_header "Checking crio service ..."
 OF=crio.txt
 plugin_message "All data stored in $OF"
 
-if check_rpm cri-o-[1-9].[1-9][0-9] && [ -e /usr/bin/crictl ] && [ -S /var/run/crio/crio.sock ]; then
-    rpm_verify $OF cri-o-[1-9].[1-9][0-9]
+if check_rpm "cri-o-[1-9].[1-9][0-9]" && [ -e /usr/bin/crictl ] && [ -S /var/run/crio/crio.sock ]; then
+    rpm_verify $OF "cri-o-[1-9].[1-9][0-9]"
     log_cmd $OF 'crictl version'
     log_cmd $OF 'systemctl status --full crio.service'
     log_cmd $OF 'crictl info'
