@@ -370,6 +370,7 @@ if check_rpm "cri-o-[1-9].[1-9][0-9]" && [ -e /usr/bin/crictl ] && [ -S /var/run
     log_cmd $OF 'crictl images'
     log_cmd $OF 'crictl ps --all'
     log_cmd $OF 'crictl stats --all'
+    log_cmd $OF 'crictl pods'
     conf_files $OF /etc/crictl.yaml
     conf_files $OF /etc/sysconfig/crio
     conf_files $OF /etc/crio/crio.conf
